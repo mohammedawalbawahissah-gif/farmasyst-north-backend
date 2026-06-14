@@ -13,3 +13,4 @@ twilio>=9.0
 requests>=2.31
 gunicorn>=22.0
 whitenoise
+python-dotenv
