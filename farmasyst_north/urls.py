@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.http import JsonResponse
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
@@ -44,6 +45,7 @@ router.register(r'inputs/dealers',  InputDealerProfileViewSet, basename='input-d
 router.register(r'inputs/listings', FarmInputViewSet,           basename='farm-inputs')
 
 urlpatterns = [
+    path('health/',                        lambda r: JsonResponse({'status': 'ok'})),
     path('admin/',                         admin.site.urls),
     path('api/v1/',                        include(router.urls)),
 
