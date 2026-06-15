@@ -45,9 +45,10 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # CorsMiddleware MUST be first — before SecurityMiddleware and everything else
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -83,7 +84,6 @@ DATABASES = {
         conn_max_age=600,
     )
 }
-
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 AUTH_USER_MODEL = 'accounts.User'
@@ -127,60 +127,87 @@ SIMPLE_JWT = {
 }
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-CORS_ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get(
-        "CORS_ALLOWED_ORIGINS",
-        config('FRONTEND_URL', default='http://localhost:5173')
-    ).split(",")
-    if origin.strip()
-]
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get("CSRF_TRUSTED_ORIGINS", "").split(",")
-    if origin.strip()
-]
+# Always include localhost for local dev. On Render, set CORS_ALLOWED_ORIGINS
+# as a comma-separated env var, e.g.:
+#   https://farmasyst-north-frontend.onrender.com,http://localhost:5173
+_cors_env = os.environ.get(
+    "CORS_ALLOWED_ORIGINS",
+    config('FRONTEND_URL', default='http://localhost:5173'),
+)
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
+# Ensure localhost dev origins are always present (harmless in production)
+_dev_origins = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
+for _o in _dev_origins:
+    if _o not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_o)
+
+_csrf_env = os.environ.get("CSRF_TRUSTED_ORIGINS", "")
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_env.split(",") if o.strip()]
+
 CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
 
 # ── Static & Media ────────────────────────────────────────────────────────────
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 USE_S3 = config('USE_S3', default=False, cast=bool)
 if USE_S3:
-    AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID')
-    AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY')
+    AWS_ACCESS_KEY_ID       = config('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY   = config('AWS_SECRET_ACCESS_KEY')
     AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME')
-    AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='us-east-1')
-    AWS_DEFAULT_ACL = 'private'
-    AWS_S3_FILE_OVERWRITE = False
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    AWS_S3_REGION_NAME      = config('AWS_S3_REGION_NAME', default='us-east-1')
+    AWS_DEFAULT_ACL         = 'private'
+    AWS_S3_FILE_OVERWRITE   = False
+    DEFAULT_FILE_STORAGE    = 'storages.backends.s3boto3.S3Boto3Storage'
 
 # ── i18n ──────────────────────────────────────────────────────────────────────
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'Africa/Accra'
-USE_I18N = True
-USE_TZ = True
+TIME_ZONE     = 'Africa/Accra'
+USE_I18N      = True
+USE_TZ        = True
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ── Third-party credentials ───────────────────────────────────────────────────
-MOMO_BASE_URL         = config('MOMO_BASE_URL', default='https://sandbox.momodeveloper.mtn.com')
+MOMO_BASE_URL         = config('MOMO_BASE_URL',         default='https://sandbox.momodeveloper.mtn.com')
 MOMO_SUBSCRIPTION_KEY = config('MOMO_SUBSCRIPTION_KEY', default='')
-MOMO_API_USER         = config('MOMO_API_USER', default='')
-MOMO_API_KEY          = config('MOMO_API_KEY', default='')
-MOMO_ENVIRONMENT      = config('MOMO_ENVIRONMENT', default='sandbox')
+MOMO_API_USER         = config('MOMO_API_USER',         default='')
+MOMO_API_KEY          = config('MOMO_API_KEY',          default='')
+MOMO_ENVIRONMENT      = config('MOMO_ENVIRONMENT',      default='sandbox')
 
-PAYSTACK_SECRET_KEY   = config('PAYSTACK_SECRET_KEY', default='')
-PAYSTACK_PUBLIC_KEY   = config('PAYSTACK_PUBLIC_KEY', default='')
+PAYSTACK_SECRET_KEY   = config('PAYSTACK_SECRET_KEY',   default='')
+PAYSTACK_PUBLIC_KEY   = config('PAYSTACK_PUBLIC_KEY',   default='')
 
-HUBTEL_CLIENT_ID      = config('HUBTEL_CLIENT_ID', default='')
-HUBTEL_CLIENT_SECRET  = config('HUBTEL_CLIENT_SECRET', default='')
-HUBTEL_SENDER_ID      = config('HUBTEL_SENDER_ID', default='FarmAsyst')
+HUBTEL_CLIENT_ID      = config('HUBTEL_CLIENT_ID',      default='')
+HUBTEL_CLIENT_SECRET  = config('HUBTEL_CLIENT_SECRET',  default='')
+HUBTEL_SENDER_ID      = config('HUBTEL_SENDER_ID',      default='FarmAsyst')
 
-TWILIO_ACCOUNT_SID    = config('TWILIO_ACCOUNT_SID', default='')
-TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN', default='')
-TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER', default='')
+TWILIO_ACCOUNT_SID    = config('TWILIO_ACCOUNT_SID',    default='')
+TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN',     default='')
+TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER',    default='')
