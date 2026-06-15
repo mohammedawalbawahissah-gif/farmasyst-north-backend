@@ -1,5 +1,4 @@
 services:
-  # ── Backend ────────────────────────────────────────────────────────────────
   - type: web
     name: farmasyst-backend
     runtime: python
@@ -23,19 +22,6 @@ services:
         value: "https://farmasyst-north-frontend.onrender.com"
       - key: CSRF_TRUSTED_ORIGINS
         value: "https://farmasyst-north-frontend.onrender.com,https://farmasyst-backend.onrender.com"
-
-  # ── Frontend ───────────────────────────────────────────────────────────────
-  - type: web
-    name: farmasyst-north-frontend
-    runtime: node
-    plan: free
-    buildCommand: "npm install && npm run build"
-    staticPublishPath: "./dist"
-    envVars:
-      - key: VITE_API_BASE_URL
-        value: "https://farmasyst-backend.onrender.com"
-      - key: NODE_VERSION
-        value: "20"
 
 databases:
   - name: farmasyst-db
