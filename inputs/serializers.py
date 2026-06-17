@@ -15,6 +15,13 @@ class InputDealerProfileSerializer(serializers.ModelSerializer):
 class FarmInputSerializer(serializers.ModelSerializer):
     dealer_name   = serializers.ReadOnlyField()
     business_name = serializers.ReadOnlyField()
+    dealer_phone  = serializers.SerializerMethodField()
+
+    def get_dealer_phone(self, obj):
+        try:
+            return obj.dealer.dealer_profile.phone or ''
+        except Exception:
+            return ''
 
     class Meta:
         model = FarmInput
