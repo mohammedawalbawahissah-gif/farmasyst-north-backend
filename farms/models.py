@@ -12,6 +12,7 @@ class Farm(models.Model):
         DUCK                = 'duck',                'Duck'
         GEESE               = 'geese',               'Geese'
         OSTRICH             = 'ostrich',             'Ostrich'
+        LOCAL_BIRDS         = 'local_birds',         'Local Birds (Cocks & Hens)'
         DAY_OLD_CHICKS      = 'day_old_chicks',      'Day-Old Chicks'
         HATCHERY            = 'hatchery',            'Hatchery Only'
         POULTRY_AND_HATCHERY = 'poultry_and_hatchery', 'Poultry + Hatchery'
@@ -63,6 +64,8 @@ class FarmActivityLog(models.Model):
     duck_count            = models.PositiveIntegerField(default=0)
     geese_count           = models.PositiveIntegerField(default=0)
     ostrich_count         = models.PositiveIntegerField(default=0)
+    local_cock_count      = models.PositiveIntegerField(default=0, help_text='Local breed cocks (roosters)')
+    local_hen_count       = models.PositiveIntegerField(default=0, help_text='Local breed hens')
     day_old_chick_count   = models.PositiveIntegerField(default=0)
 
     # Hatchery-specific fields
@@ -84,7 +87,8 @@ class FarmActivityLog(models.Model):
     def flock_count(self):
         return (self.broiler_count + self.layer_count + self.guinea_fowl_count +
                 self.turkey_count + self.duck_count + self.geese_count +
-                self.ostrich_count + self.day_old_chick_count)
+                self.ostrich_count + self.local_cock_count + self.local_hen_count +
+                self.day_old_chick_count)
 
     mortality    = models.PositiveIntegerField(default=0)
     feed_kg      = models.DecimalField(max_digits=8, decimal_places=2, default=0)
