@@ -5,6 +5,18 @@ from .models import Produce, Order, OrderItem, ProduceReview
 class ProduceSerializer(serializers.ModelSerializer):
     farm_name   = serializers.CharField(source='farm.name', read_only=True)
     seller_name = serializers.CharField(source='seller.get_full_name', read_only=True)
+    photo       = serializers.SerializerMethodField()
+
+    def get_photo(self, obj):
+        if not obj.photo:
+            return None
+        request = self.context.get('request')
+        url = obj.photo.url
+        if request:
+            return request.build_absolute_uri(url)
+        from django.conf import settings
+        base = getattr(settings, 'BACKEND_URL', '').rstrip('/')
+        return f'{base}{url}' if base else url
 
     class Meta:
         model = Produce
