@@ -26,12 +26,17 @@ class VetProfileViewSet(viewsets.ModelViewSet):
             return [IsVet()]
         return [IsAuthenticated()]
 
-    @action(detail=False, methods=['get'], permission_classes=[IsVet])
+    @action(detail=False, methods=['get', 'patch'], permission_classes=[IsVet])
     def me(self, request):
         profile, _ = VetProfile.objects.get_or_create(
             user=request.user,
             defaults={'license_number': f'TMP-{request.user.id}', 'clinic_name': ''},
         )
+        if request.method == 'PATCH':
+            serializer = VetProfileSerializer(profile, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
         return Response(VetProfileSerializer(profile).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])

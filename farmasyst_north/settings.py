@@ -211,3 +211,5 @@ HUBTEL_SENDER_ID      = config('HUBTEL_SENDER_ID',      default='FarmAsyst')
 TWILIO_ACCOUNT_SID    = config('TWILIO_ACCOUNT_SID',    default='')
 TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN',     default='')
 TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER',    default='')
+
+FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')

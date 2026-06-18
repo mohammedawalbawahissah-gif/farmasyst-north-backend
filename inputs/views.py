@@ -24,12 +24,17 @@ class InputDealerProfileViewSet(viewsets.ModelViewSet):
             return [IsInputDealer()]
         return [IsAuthenticated()]
 
-    @action(detail=False, methods=['get'], permission_classes=[IsInputDealer])
+    @action(detail=False, methods=['get', 'patch'], permission_classes=[IsInputDealer])
     def me(self, request):
         profile, _ = InputDealerProfile.objects.get_or_create(
             user=request.user,
             defaults={'business_name': ''},
         )
+        if request.method == 'PATCH':
+            serializer = InputDealerProfileSerializer(profile, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data)
         return Response(InputDealerProfileSerializer(profile).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])

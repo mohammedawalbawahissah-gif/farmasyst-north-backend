@@ -5,10 +5,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
+from django.conf import settings
 from .models import Produce, Order, OrderItem, ProduceReview
 from .serializers import ProduceSerializer, OrderSerializer, ProduceReviewSerializer
 from accounts.permissions import IsFarmer, IsAdmin
 from notifications.models import Notification
+from payments.services import momo_service, paystack_service
 
 
 def _notify(recipient, notif_type, title, body, data=None):
@@ -68,10 +70,6 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
-        """
-        Fully manual create — bypass DRF serializer validation on input
-        so that choice-field defaults set in this method don't cause 400s.
-        """
         data           = request.data
         produce_id     = data.get('produce_id')
         delivery_type  = data.get('delivery_type', 'pickup')
@@ -141,7 +139,6 @@ class OrderViewSet(viewsets.ModelViewSet):
         buyer_name     = request.user.get_full_name() or request.user.email
         farm_name      = produce.farm.name if produce.farm else 'your farm'
         delivery_label = 'Farm Pickup' if delivery_type == 'pickup' else 'Home Delivery'
-        pay_label      = 'Instant (MoMo/Card)' if payment_method == 'instant' else 'Cash on Delivery'
 
         _notify(
             recipient  = produce.seller,
@@ -150,7 +147,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             body       = (
                 f'{buyer_name} ordered {quantity} {produce.unit} of {produce.name} '
                 f'(GHS {float(subtotal):,.2f}). Fulfilment: {delivery_label}. '
-                f'Payment: {pay_label}. Ref: {order.reference}.'
+                f'Payment: {payment_method}. Ref: {order.reference}.'
             ),
             data={'order_id': str(order.id), 'order_reference': order.reference},
         )
@@ -160,12 +157,191 @@ class OrderViewSet(viewsets.ModelViewSet):
             title      = f'Order placed — {order.reference}',
             body       = (
                 f'Your order for {quantity} {produce.unit} of {produce.name} '
-                f'from {farm_name} was placed. The farmer will confirm shortly.'
+                f'from {farm_name} was placed successfully.'
             ),
             data={'order_id': str(order.id), 'order_reference': order.reference},
         )
 
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='initiate_payment')
+    def initiate_payment(self, request, pk=None):
+        """
+        Initiate real payment for an existing order.
+
+        For MoMo: sends a mobile money prompt to the buyer's phone.
+        For card:  initializes a Paystack transaction and returns the
+                   authorization_url to redirect the buyer to.
+        For bank_transfer: returns bank account details.
+        For cash_on_delivery: no-op (confirm immediately).
+
+        Request body:
+          - phone_number  (str, required for momo)
+        """
+        order = self.get_object()
+
+        # Only the buyer can initiate payment
+        if order.buyer != request.user:
+            return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if order.status not in ('pending',):
+            return Response(
+                {'detail': f'Cannot initiate payment for an order with status "{order.status}".'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payment_method = order.payment_method
+        total = float(order.total_amount)
+
+        # ── Cash on delivery ────────────────────────────────────────────────
+        if payment_method == 'cash_on_delivery':
+            return Response({
+                'payment_method': 'cash_on_delivery',
+                'message': 'No online payment needed. Pay on delivery.',
+                'order': OrderSerializer(order).data,
+            })
+
+        # ── Bank Transfer ────────────────────────────────────────────────────
+        if payment_method == 'bank_transfer':
+            return Response({
+                'payment_method': 'bank_transfer',
+                'bank_name':      'Stanbic Bank Ghana',
+                'account_name':   'FarmAsyst North Ltd',
+                'account_number': '9040008877142',
+                'amount':         total,
+                'reference':      order.reference,
+                'message':        f'Transfer GHS {total:,.2f} and use {order.reference} as your payment reference.',
+                'order': OrderSerializer(order).data,
+            })
+
+        # ── MoMo ─────────────────────────────────────────────────────────────
+        if payment_method == 'momo':
+            phone = request.data.get('phone_number', '').strip()
+            if not phone or len(phone) < 10:
+                return Response(
+                    {'detail': 'A valid MoMo phone number is required.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Normalize phone: strip leading 0, add 233 country code
+            if phone.startswith('0'):
+                phone = '233' + phone[1:]
+            elif not phone.startswith('233'):
+                phone = '233' + phone
+
+            result = momo_service.request_to_pay(
+                amount    = str(int(total * 100)),  # MoMo uses pesewas
+                phone     = phone,
+                reference = order.reference,
+                narration = f'Payment for FarmAsyst order {order.reference}',
+            )
+
+            if result.get('success'):
+                # Store the MoMo reference for webhook reconciliation
+                order.payment_reference = result.get('reference_id', '')
+                order.save(update_fields=['payment_reference'] if hasattr(order, 'payment_reference') else [])
+
+                _notify(
+                    recipient  = order.buyer,
+                    notif_type = 'payment',
+                    title      = 'MoMo prompt sent',
+                    body       = f'A payment prompt of GHS {total:,.2f} has been sent to {request.data.get("phone_number")}. Approve it on your phone to complete your order.',
+                    data       = {'order_id': str(order.id)},
+                )
+                return Response({
+                    'payment_method': 'momo',
+                    'message':        f'A MoMo prompt of GHS {total:,.2f} has been sent to {request.data.get("phone_number")}. Approve it on your phone.',
+                    'reference_id':   result.get('reference_id'),
+                    'order':          OrderSerializer(order).data,
+                })
+            else:
+                return Response(
+                    {'detail': 'Could not send MoMo prompt. Please check the number and try again.',
+                     'error':  result.get('error', '')},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+        # ── Card via Paystack ─────────────────────────────────────────────────
+        if payment_method == 'card':
+            frontend_base = getattr(settings, 'FRONTEND_URL', 'https://farmasyst-north-frontend.onrender.com')
+            callback_url  = f'{frontend_base}/consumer/orders?ref={order.reference}'
+
+            result = paystack_service.initialize_transaction(
+                email        = request.user.email,
+                amount_ghs   = total,
+                reference    = order.reference,
+                callback_url = callback_url,
+            )
+
+            if result.get('success'):
+                auth_url = result['data'].get('authorization_url', '')
+                access_code = result['data'].get('access_code', '')
+                _notify(
+                    recipient  = order.buyer,
+                    notif_type = 'payment',
+                    title      = 'Complete your card payment',
+                    body       = f'Click the link to complete payment of GHS {total:,.2f} for order {order.reference}.',
+                    data       = {'order_id': str(order.id), 'authorization_url': auth_url},
+                )
+                return Response({
+                    'payment_method':    'card',
+                    'authorization_url': auth_url,
+                    'access_code':       access_code,
+                    'reference':         order.reference,
+                    'message':           'Redirect the user to authorization_url to complete card payment.',
+                    'order':             OrderSerializer(order).data,
+                })
+            else:
+                return Response(
+                    {'detail': 'Could not initialize card payment. Please try again.',
+                     'error':  result.get('error', '')},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
+
+        return Response({'detail': f'Unsupported payment method: {payment_method}.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='verify_payment')
+    def verify_payment(self, request, pk=None):
+        """
+        Verify a card payment after Paystack redirects back.
+        Called by the frontend after buyer returns from Paystack checkout.
+
+        Request body:
+          - reference  (str) — the Paystack transaction reference (= order.reference)
+        """
+        order = self.get_object()
+        reference = request.data.get('reference') or order.reference
+
+        result = paystack_service.verify_transaction(reference)
+
+        if result.get('success') and result.get('data', {}).get('status') == 'success':
+            order.status = 'confirmed'
+            order.save(update_fields=['status'])
+            _notify(
+                recipient  = order.buyer,
+                notif_type = 'payment',
+                title      = 'Payment confirmed ✅',
+                body       = f'Your payment of GHS {float(order.total_amount):,.2f} for order {order.reference} was confirmed.',
+                data       = {'order_id': str(order.id)},
+            )
+            _notify(
+                recipient  = order.items.first().produce.seller if order.items.exists() else None,
+                notif_type = 'payment',
+                title      = f'Payment received — {order.reference}',
+                body       = f'Card payment of GHS {float(order.total_amount):,.2f} confirmed for order {order.reference}.',
+                data       = {'order_id': str(order.id)},
+            ) if order.items.exists() else None
+            return Response({
+                'status':  'confirmed',
+                'message': 'Payment verified and order confirmed.',
+                'order':   OrderSerializer(order).data,
+            })
+        else:
+            return Response(
+                {'detail': 'Payment not yet confirmed or verification failed.',
+                 'paystack_status': result.get('data', {}).get('status', 'unknown')},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
