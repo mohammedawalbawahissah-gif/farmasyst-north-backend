@@ -214,3 +214,29 @@ class UserViewSet(viewsets.ModelViewSet):
         user.is_active = False
         user.save()
         return Response({'detail': f'{user.get_full_name()} suspended.'})
+
+    @action(detail=True, methods=['post'])
+    def unsuspend(self, request, pk=None):
+        user = self.get_object()
+        user.is_active = True
+        user.save()
+        return Response({'detail': f'{user.get_full_name()} reactivated.'})
+
+    @action(detail=True, methods=['post'], url_path='update_credit_score')
+    def update_credit_score(self, request, pk=None):
+        from django.utils import timezone
+        user = self.get_object()
+        if not hasattr(user, 'farmer_profile'):
+            return Response({'detail': 'This user does not have a farmer profile.'}, status=400)
+        score = request.data.get('credit_score')
+        try:
+            score = float(score)
+            if score < 0 or score > 999.99:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid credit score. Must be a number between 0 and 999.99.'}, status=400)
+        profile = user.farmer_profile
+        profile.credit_score = score
+        profile.credit_score_updated_at = timezone.now()
+        profile.save()
+        return Response({'detail': f'Credit score updated to {score} for {user.get_full_name()}.', 'credit_score': str(score)})

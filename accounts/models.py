@@ -40,7 +40,22 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff      = models.BooleanField(default=False)
     is_verified   = models.BooleanField(default=False)
     profile_photo = models.ImageField(upload_to='profile_photos/', null=True, blank=True)
-    language      = models.CharField(max_length=10, default='en', choices=[('en', 'English'), ('dag', 'Dagbani')])
+    language      = models.CharField(max_length=10, default='en', choices=[
+        ('en',  'English'),
+        ('dag', 'Dagbani'),
+        ('tw',  'Twi (Akan)'),
+        ('ee',  'Ewe'),
+        ('fat', 'Fante'),
+        ('gaa', 'Ga'),
+        ('hau', 'Hausa'),
+        ('kus', 'Kusaal'),
+        ('nzi', 'Nzema'),
+        ('gur', 'Gurene (Frafra)'),
+        ('kas', 'Kasem'),
+        ('bim', 'Bimoba'),
+        ('kon', 'Konkomba'),
+        ('mam', 'Mampruli'),
+    ])
     date_joined   = models.DateTimeField(auto_now_add=True)
     updated_at    = models.DateTimeField(auto_now=True)
 

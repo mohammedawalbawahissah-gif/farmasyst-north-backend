@@ -4,16 +4,22 @@ from .models import User, FarmerProfile, InvestorProfile
 
 
 class UserSerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
+    full_name    = serializers.SerializerMethodField()
+    credit_score = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ['id','email','first_name','last_name','full_name','phone','role',
-                  'is_verified','profile_photo','language','date_joined']
-        read_only_fields = ['id','is_verified','date_joined']
+                  'is_verified','is_active','profile_photo','language','date_joined','credit_score']
+        read_only_fields = ['id','is_verified','is_active','date_joined','credit_score']
 
     def get_full_name(self, obj):
         return obj.get_full_name()
+
+    def get_credit_score(self, obj):
+        if hasattr(obj, 'farmer_profile'):
+            return str(obj.farmer_profile.credit_score)
+        return None
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -49,7 +55,7 @@ class FarmerProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = FarmerProfile
         fields = '__all__'
-        read_only_fields = ['user', 'credit_score', 'credit_score_updated_at', 'verification_status']
+        read_only_fields = ['user', 'credit_score_updated_at', 'verification_status']
 
 
 class InvestorProfileSerializer(serializers.ModelSerializer):
