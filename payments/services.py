@@ -8,18 +8,46 @@ class MoMoService:
 
     BASE_URL = settings.MOMO_BASE_URL
     SUBSCRIPTION_KEY = settings.MOMO_SUBSCRIPTION_KEY
+    API_USER = settings.MOMO_API_USER
+    API_KEY  = settings.MOMO_API_KEY
 
-    def _headers(self, reference_id=None):
-        return {
+    def _get_access_token(self, product='collection') -> str | None:
+        """Obtain a short-lived Bearer token for the given product (collection/disbursement)."""
+        import base64
+        creds = base64.b64encode(f'{self.API_USER}:{self.API_KEY}'.encode()).decode()
+        try:
+            resp = requests.post(
+                f'{self.BASE_URL}/{product}/token/',
+                headers={
+                    'Authorization': f'Basic {creds}',
+                    'Ocp-Apim-Subscription-Key': self.SUBSCRIPTION_KEY,
+                },
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                return resp.json().get('access_token')
+        except Exception:
+            pass
+        return None
+
+    def _headers(self, reference_id=None, access_token=None, product='collection'):
+        """Build request headers, fetching a fresh access token if not provided."""
+        if not access_token:
+            access_token = self._get_access_token(product)
+        h = {
             'X-Reference-Id': reference_id or str(uuid.uuid4()),
             'X-Target-Environment': settings.MOMO_ENVIRONMENT,
             'Ocp-Apim-Subscription-Key': self.SUBSCRIPTION_KEY,
             'Content-Type': 'application/json',
         }
+        if access_token:
+            h['Authorization'] = f'Bearer {access_token}'
+        return h
 
     def request_to_pay(self, amount: str, phone: str, reference: str, narration: str) -> dict:
-        """Initiate a MoMo collection (repayment from farmer)."""
+        """Initiate a MoMo collection (payment from buyer/farmer)."""
         ref_id = str(uuid.uuid4())
+        token  = self._get_access_token('collection')
         payload = {
             'amount': amount,
             'currency': 'GHS',
@@ -32,7 +60,7 @@ class MoMoService:
             resp = requests.post(
                 f'{self.BASE_URL}/collection/v1_0/requesttopay',
                 json=payload,
-                headers=self._headers(ref_id),
+                headers=self._headers(ref_id, token, 'collection'),
                 timeout=30,
             )
             return {'success': resp.status_code == 202, 'reference_id': ref_id,
@@ -43,6 +71,7 @@ class MoMoService:
     def transfer(self, amount: str, phone: str, reference: str, narration: str) -> dict:
         """Initiate a MoMo disbursement (payout to farmer)."""
         ref_id = str(uuid.uuid4())
+        token  = self._get_access_token('disbursement')
         payload = {
             'amount': amount,
             'currency': 'GHS',
@@ -55,7 +84,7 @@ class MoMoService:
             resp = requests.post(
                 f'{self.BASE_URL}/disbursement/v1_0/transfer',
                 json=payload,
-                headers=self._headers(ref_id),
+                headers=self._headers(ref_id, token, 'disbursement'),
                 timeout=30,
             )
             return {'success': resp.status_code == 202, 'reference_id': ref_id,
@@ -65,10 +94,11 @@ class MoMoService:
 
     def check_status(self, reference_id: str, operation: str = 'collection') -> dict:
         endpoint = 'collection' if operation == 'collection' else 'disbursement'
+        token = self._get_access_token(endpoint)
         try:
             resp = requests.get(
                 f'{self.BASE_URL}/{endpoint}/v1_0/requesttopay/{reference_id}',
-                headers=self._headers(),
+                headers=self._headers(access_token=token, product=endpoint),
                 timeout=30,
             )
             return {'success': True, 'data': resp.json()}

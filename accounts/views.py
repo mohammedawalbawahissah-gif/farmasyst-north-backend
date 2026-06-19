@@ -203,9 +203,10 @@ class UserViewSet(viewsets.ModelViewSet):
         user.is_active   = True
         user.is_verified = True
         user.save()
-        if hasattr(user, 'farmer_profile'):
-            user.farmer_profile.verification_status = 'verified'
-            user.farmer_profile.save()
+        if user.role == 'farmer':
+            profile, _ = FarmerProfile.objects.get_or_create(user=user)
+            profile.verification_status = 'verified'
+            profile.save()
         return Response({'detail': f'{user.get_full_name()} verified and account activated.'})
 
     @action(detail=True, methods=['post'])

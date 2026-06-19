@@ -239,7 +239,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             if result.get('success'):
                 # Store the MoMo reference for webhook reconciliation
                 order.payment_reference = result.get('reference_id', '')
-                order.save(update_fields=['payment_reference'] if hasattr(order, 'payment_reference') else [])
+                order.save(update_fields=['payment_reference'])
 
                 _notify(
                     recipient  = order.buyer,
