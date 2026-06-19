@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 from django.utils import timezone
+from django.conf import settings
 from rest_framework import viewsets, generics, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -13,7 +14,7 @@ from .serializers import (
     DisbursementRequestSerializer, ApproveDisbursementSerializer,
     RejectDisbursementSerializer,
 )
-from .services import momo_service, paystack_service
+from .services import momo_service, paystack_service, build_momo_callback_url
 from accounts.permissions import IsAdmin, IsFarmer, IsInvestor, IsInvestorOrAdmin
 from notifications.utils import send_notification
 
@@ -104,7 +105,8 @@ class InitiateRepaymentView(generics.GenericAPIView):
                 amount=str(schedule.amount_due),
                 phone=data.get('phone_number', ''),
                 reference=payment.reference,
-                narration=f'FarmAsyst North repayment — {schedule.agreement.reference}'
+                narration=f'FarmAsyst North repayment — {schedule.agreement.reference}',
+                callback_url=build_momo_callback_url(),
             )
             payment.gateway_ref = result.get('reference_id', '')
             payment.gateway_response = result
@@ -187,6 +189,7 @@ class PayFullBalanceView(generics.GenericAPIView):
                 phone=data.get('phone_number', ''),
                 reference=payment.reference,
                 narration=f'FarmAsyst North full settlement — {agreement.reference}',
+                callback_url=build_momo_callback_url(),
             )
             payment.gateway_ref = result.get('reference_id', '')
             payment.gateway_response = result
@@ -257,6 +260,124 @@ class PaystackWebhookView(generics.GenericAPIView):
             except Payment.DoesNotExist:
                 pass
         return Response({'status': 'ok'})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MTN MoMo Webhook
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MoMoWebhookView(generics.GenericAPIView):
+    """
+    Receives the final SUCCESSFUL/FAILED status MTN posts to X-Callback-Url
+    once a buyer/farmer approves or declines the USSD prompt on their phone.
+
+    Until now, MoMo orders/repayments stayed stuck on "pending" forever
+    because nothing was listening for this callback — request_to_pay only
+    confirms the *prompt* was sent, not whether it was accepted.
+
+    Expected MTN payload (sandbox & production use the same shape):
+        {
+          "financialTransactionId": "...",
+          "externalId": "<our Payment.reference or Order.reference>",
+          "amount": "...",
+          "currency": "GHS",
+          "payer": {"partyIdType": "MSISDN", "partyId": "233..."},
+          "status": "SUCCESSFUL" | "FAILED",
+          "reason": {...}            # present only when status == FAILED
+        }
+
+    `externalId` is what we set as `reference` in request_to_pay(), so it's
+    either a repayment Payment.reference (PAY-xxxxxx) or a marketplace
+    Order.reference (ORD-xxxxx) — we check both.
+
+    If MOMO_WEBHOOK_SECRET is set, the callback URL carries ?key=<secret>
+    (see build_momo_callback_url) and requests without a matching key are
+    rejected.
+    """
+    permission_classes = []
+
+    def post(self, request):
+        secret = getattr(settings, 'MOMO_WEBHOOK_SECRET', '')
+        if secret and request.query_params.get('key') != secret:
+            return Response({'detail': 'Invalid or missing key.'}, status=status.HTTP_403_FORBIDDEN)
+
+        data        = request.data
+        external_id = (data.get('externalId') or '').strip()
+        momo_status = (data.get('status') or '').upper()
+
+        if not external_id or momo_status not in ('SUCCESSFUL', 'FAILED'):
+            # Not a status we act on yet (e.g. PENDING) — ack so MTN doesn't retry.
+            return Response({'status': 'ignored'})
+
+        payment = Payment.objects.filter(reference=external_id).first()
+        if payment:
+            self._handle_payment(payment, momo_status, data)
+            return Response({'status': 'ok'})
+
+        # Imported here to avoid a module-level payments <-> marketplace cycle.
+        from marketplace.models import Order
+        order = Order.objects.filter(reference=external_id).first()
+        if order:
+            self._handle_order(order, momo_status, data)
+            return Response({'status': 'ok'})
+
+        return Response({'status': 'ignored', 'detail': 'No matching payment or order.'})
+
+    def _handle_payment(self, payment, momo_status, data):
+        if payment.status in ('success', 'failed'):
+            return  # already processed — webhook can be retried/duplicated by MTN
+        payment.gateway_response = {**payment.gateway_response, 'webhook': dict(data)}
+
+        if momo_status == 'SUCCESSFUL':
+            payment.status = 'success'
+            payment.save()
+            if payment.schedule:
+                payment.schedule.amount_paid = payment.amount
+                payment.schedule.status = 'paid'
+                payment.schedule.paid_at = timezone.now()
+                payment.schedule.save()
+            send_notification(payment.payer, 'repayment_received',
+                              'Repayment Confirmed ✅',
+                              f'GHS {payment.amount} MoMo payment received.')
+        else:
+            payment.status = 'failed'
+            payment.save()
+            send_notification(payment.payer, 'repayment_due',
+                              'MoMo Payment Failed',
+                              f'Your GHS {payment.amount} MoMo payment did not go through. Please try again.')
+
+    def _handle_order(self, order, momo_status, data):
+        if order.status in ('confirmed', 'cancelled'):
+            return  # already processed
+        order.payment_reference = data.get('financialTransactionId', order.payment_reference)
+
+        if momo_status == 'SUCCESSFUL':
+            order.status = 'confirmed'
+            order.save(update_fields=['status', 'payment_reference'])
+
+            send_notification(order.buyer, 'payment',
+                              'Payment confirmed ✅',
+                              f'Your GHS {float(order.total_amount):,.2f} MoMo payment for order {order.reference} was confirmed.')
+            for item in order.items.select_related('produce__seller'):
+                send_notification(item.produce.seller, 'payment',
+                                  f'Payment received — {order.reference}',
+                                  f'MoMo payment of GHS {float(order.total_amount):,.2f} confirmed for order {order.reference}. Please prepare the order.')
+        else:
+            order.status = 'cancelled'
+            order.save(update_fields=['status', 'payment_reference'])
+
+            # Stock was decremented optimistically when the order was placed —
+            # since payment failed, give it back to the listing.
+            for item in order.items.select_related('produce'):
+                produce = item.produce
+                produce.quantity_available = produce.quantity_available + item.quantity
+                if produce.status == 'sold_out':
+                    produce.status = 'active'
+                produce.save(update_fields=['quantity_available', 'status'])
+
+            send_notification(order.buyer, 'payment',
+                              'Payment failed',
+                              f'Your MoMo payment for order {order.reference} was not approved. The order has been cancelled and the item put back in stock.')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

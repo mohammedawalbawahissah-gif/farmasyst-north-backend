@@ -30,7 +30,7 @@ class MoMoService:
             pass
         return None
 
-    def _headers(self, reference_id=None, access_token=None, product='collection'):
+    def _headers(self, reference_id=None, access_token=None, product='collection', callback_url=None):
         """Build request headers, fetching a fresh access token if not provided."""
         if not access_token:
             access_token = self._get_access_token(product)
@@ -42,10 +42,17 @@ class MoMoService:
         }
         if access_token:
             h['Authorization'] = f'Bearer {access_token}'
+        if callback_url:
+            h['X-Callback-Url'] = callback_url
         return h
 
-    def request_to_pay(self, amount: str, phone: str, reference: str, narration: str) -> dict:
-        """Initiate a MoMo collection (payment from buyer/farmer)."""
+    def request_to_pay(self, amount: str, phone: str, reference: str, narration: str, callback_url: str = None) -> dict:
+        """Initiate a MoMo collection (payment from buyer/farmer).
+
+        `callback_url`, if provided, is sent as X-Callback-Url so MTN POSTs
+        the final SUCCESSFUL/FAILED status to our webhook once the buyer
+        approves or declines the prompt on their phone.
+        """
         ref_id = str(uuid.uuid4())
         token  = self._get_access_token('collection')
         payload = {
@@ -60,7 +67,7 @@ class MoMoService:
             resp = requests.post(
                 f'{self.BASE_URL}/collection/v1_0/requesttopay',
                 json=payload,
-                headers=self._headers(ref_id, token, 'collection'),
+                headers=self._headers(ref_id, token, 'collection', callback_url),
                 timeout=30,
             )
             return {'success': resp.status_code == 202, 'reference_id': ref_id,
@@ -160,6 +167,22 @@ class HubtelSMSService:
             return {'success': resp.status_code == 200, 'response': resp.text}
         except requests.RequestException as e:
             return {'success': False, 'error': str(e)}
+
+
+def build_momo_callback_url() -> str:
+    """
+    Build the X-Callback-Url MTN will POST the final payment status to.
+
+    Uses MOMO_CALLBACK_URL if explicitly set, otherwise derives it from
+    BACKEND_URL. Appends ?key=<MOMO_WEBHOOK_SECRET> when that secret is
+    configured, so the webhook view can reject unauthenticated callers.
+    """
+    base = settings.MOMO_CALLBACK_URL or f"{settings.BACKEND_URL.rstrip('/')}/api/v1/webhooks/momo/"
+    secret = getattr(settings, 'MOMO_WEBHOOK_SECRET', '')
+    if secret:
+        sep = '&' if '?' in base else '?'
+        return f'{base}{sep}key={secret}'
+    return base
 
 
 momo_service    = MoMoService()

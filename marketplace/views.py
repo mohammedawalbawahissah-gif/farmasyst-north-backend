@@ -10,7 +10,7 @@ from .models import Produce, Order, OrderItem, ProduceReview
 from .serializers import ProduceSerializer, OrderSerializer, ProduceReviewSerializer
 from accounts.permissions import IsFarmer, IsAdmin
 from notifications.models import Notification
-from payments.services import momo_service, paystack_service
+from payments.services import momo_service, paystack_service, build_momo_callback_url
 
 
 def _notify(recipient, notif_type, title, body, data=None):
@@ -234,6 +234,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 phone     = phone,
                 reference = order.reference,
                 narration = f'Payment for FarmAsyst order {order.reference}',
+                callback_url = build_momo_callback_url(),
             )
 
             if result.get('success'):
@@ -366,6 +367,15 @@ class OrderViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Cannot cancel at this stage.'}, status=400)
         order.status = 'cancelled'
         order.save()
+
+        # Give back stock that was optimistically deducted at order creation.
+        for item in order.items.select_related('produce'):
+            produce = item.produce
+            produce.quantity_available = produce.quantity_available + item.quantity
+            if produce.status == 'sold_out':
+                produce.status = 'active'
+            produce.save(update_fields=['quantity_available', 'status'])
+
         if request.user.role == 'farmer':
             _notify(
                 recipient  = order.buyer,

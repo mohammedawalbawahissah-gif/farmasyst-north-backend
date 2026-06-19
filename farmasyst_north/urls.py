@@ -17,7 +17,7 @@ from marketplace.views import ProduceViewSet, OrderViewSet, ProduceReviewViewSet
 from training.views import TrainingModuleViewSet, TrainingEnrolmentViewSet
 from notifications.views import NotificationViewSet
 from payments.views import (RepaymentScheduleViewSet, InitiateRepaymentView,
-                             PaystackWebhookView, DisbursementViewSet,
+                             PaystackWebhookView, MoMoWebhookView, DisbursementViewSet,
                              DisbursementRequestViewSet, PayFullBalanceView)
 from vet.views import VetProfileViewSet, VetServiceViewSet, VetBookingViewSet
 from inputs.views import InputDealerProfileViewSet, FarmInputViewSet
@@ -73,5 +73,6 @@ urlpatterns = [
     path('api/v1/payments/initiate-repayment/', InitiateRepaymentView.as_view()),
     path('api/v1/payments/pay-full-balance/',   PayFullBalanceView.as_view()),
     path('api/v1/webhooks/paystack/',           PaystackWebhookView.as_view()),
+    path('api/v1/webhooks/momo/',               MoMoWebhookView.as_view()),
 
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

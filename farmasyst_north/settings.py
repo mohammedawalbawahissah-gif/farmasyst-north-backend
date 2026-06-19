@@ -201,6 +201,17 @@ MOMO_API_USER         = config('MOMO_API_USER',         default='')
 MOMO_API_KEY          = config('MOMO_API_KEY',          default='')
 MOMO_ENVIRONMENT      = config('MOMO_ENVIRONMENT',      default='sandbox')
 
+# Public URL of THIS backend (used to build the MoMo X-Callback-Url).
+# On Render this is your service URL, e.g. https://farmasyst-north-backend.onrender.com
+BACKEND_URL           = config('BACKEND_URL',           default='http://localhost:8000')
+# Optional full override of the callback URL. Leave blank to auto-derive
+# from BACKEND_URL as `${BACKEND_URL}/api/v1/webhooks/momo/`.
+MOMO_CALLBACK_URL     = config('MOMO_CALLBACK_URL',     default='')
+# Optional shared secret appended as ?key=... to the callback URL so the
+# webhook endpoint can reject requests that don't carry it. Leave blank
+# while testing in the sandbox; set it before going to production.
+MOMO_WEBHOOK_SECRET   = config('MOMO_WEBHOOK_SECRET',   default='')
+
 PAYSTACK_SECRET_KEY   = config('PAYSTACK_SECRET_KEY',   default='')
 PAYSTACK_PUBLIC_KEY   = config('PAYSTACK_PUBLIC_KEY',   default='')
 
