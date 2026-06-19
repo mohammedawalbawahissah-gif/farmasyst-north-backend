@@ -1,4 +1,5 @@
 from decimal import Decimal
+import logging
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -11,6 +12,8 @@ from .serializers import ProduceSerializer, OrderSerializer, ProduceReviewSerial
 from accounts.permissions import IsFarmer, IsAdmin
 from notifications.models import Notification
 from payments.services import momo_service, paystack_service, build_momo_callback_url
+
+logger = logging.getLogger(__name__)
 
 
 def _notify(recipient, notif_type, title, body, data=None):
@@ -256,8 +259,9 @@ class OrderViewSet(viewsets.ModelViewSet):
                     'order':          OrderSerializer(order).data,
                 })
             else:
+                logger.error('MoMo initiate_payment failed for order=%s: %s', order.reference, result)
                 return Response(
-                    {'detail': 'Could not send MoMo prompt. Please check the number and try again.',
+                    {'detail': result.get('detail', 'Could not send MoMo prompt. Please check the number and try again.'),
                      'error':  result.get('error', '')},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )

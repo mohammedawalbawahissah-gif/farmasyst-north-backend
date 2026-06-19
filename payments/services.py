@@ -1,6 +1,9 @@
 import uuid
+import logging
 import requests
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 
 class MoMoService:
@@ -37,8 +40,14 @@ class MoMoService:
             )
             if resp.status_code == 200:
                 return resp.json().get('access_token')
-        except Exception:
-            pass
+            logger.error(
+                'MoMo %s token request failed: status=%s body=%s (API_USER=%r set=%s, '
+                'API_KEY set=%s, SUBSCRIPTION_KEY set=%s)',
+                product, resp.status_code, resp.text[:500],
+                self.API_USER, bool(self.API_USER), bool(self.API_KEY), bool(self.SUBSCRIPTION_KEY),
+            )
+        except requests.RequestException as e:
+            logger.error('MoMo %s token request raised: %s', product, e)
         return None
 
     def _headers(self, reference_id=None, access_token=None, product='collection', callback_url=None):
@@ -66,6 +75,16 @@ class MoMoService:
         """
         ref_id = str(uuid.uuid4())
         token  = self._get_access_token('collection')
+        if not token:
+            logger.error('MoMo request_to_pay aborted for reference=%s: no access token (see prior log line for why)', reference)
+            return {
+                'success': False,
+                'reference_id': ref_id,
+                'error': 'momo_auth_failed',
+                'detail': 'Could not authenticate with MTN MoMo. Check MOMO_API_USER / MOMO_API_KEY / '
+                          'MOMO_SUBSCRIPTION_KEY and see server logs for the exact MTN response.',
+            }
+
         payload = {
             'amount': amount,
             'currency': 'GHS',
@@ -81,10 +100,20 @@ class MoMoService:
                 headers=self._headers(ref_id, token, 'collection', callback_url),
                 timeout=30,
             )
-            return {'success': resp.status_code == 202, 'reference_id': ref_id,
-                    'status_code': resp.status_code, 'response': resp.text}
+            if resp.status_code == 202:
+                return {'success': True, 'reference_id': ref_id, 'status_code': 202}
+
+            logger.error('MoMo requesttopay rejected for reference=%s: status=%s body=%s',
+                         reference, resp.status_code, resp.text[:500])
+            return {
+                'success': False,
+                'reference_id': ref_id,
+                'status_code': resp.status_code,
+                'error': resp.text or f'MTN returned HTTP {resp.status_code}',
+            }
         except requests.RequestException as e:
-            return {'success': False, 'error': str(e)}
+            logger.error('MoMo requesttopay raised for reference=%s: %s', reference, e)
+            return {'success': False, 'reference_id': ref_id, 'error': str(e)}
 
     def transfer(self, amount: str, phone: str, reference: str, narration: str) -> dict:
         """Initiate a MoMo disbursement (payout to farmer)."""

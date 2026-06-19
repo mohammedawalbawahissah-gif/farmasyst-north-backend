@@ -224,3 +224,23 @@ TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN',     default='')
 TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER',    default='')
 
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+
+# Ensure payment-gateway errors (MoMo, Paystack, Hubtel, Twilio) actually
+# show up in `render logs` — Render captures stdout, so route everything
+# there with enough detail to debug a failed prompt/charge.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {'format': '[{asctime}] {levelname} {name}: {message}', 'style': '{'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'verbose'},
+    },
+    'root': {'handlers': ['console'], 'level': 'INFO'},
+    'loggers': {
+        'payments':    {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'marketplace': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'django':      {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+    },
+}
