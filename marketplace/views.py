@@ -230,7 +230,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 phone = '233' + phone
 
             result = momo_service.request_to_pay(
-                amount    = str(int(total * 100)),  # MoMo uses pesewas
+                amount    = f'{total:.2f}',  # MoMo uses GHS (not pesewas)
                 phone     = phone,
                 reference = order.reference,
                 narration = f'Payment for FarmAsyst order {order.reference}',
