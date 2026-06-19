@@ -6,10 +6,21 @@ from django.conf import settings
 class MoMoService:
     """MTN Mobile Money API integration."""
 
-    BASE_URL = settings.MOMO_BASE_URL
-    SUBSCRIPTION_KEY = settings.MOMO_SUBSCRIPTION_KEY
-    API_USER = settings.MOMO_API_USER
-    API_KEY  = settings.MOMO_API_KEY
+    @property
+    def BASE_URL(self):
+        return settings.MOMO_BASE_URL
+
+    @property
+    def SUBSCRIPTION_KEY(self):
+        return settings.MOMO_SUBSCRIPTION_KEY
+
+    @property
+    def API_USER(self):
+        return settings.MOMO_API_USER
+
+    @property
+    def API_KEY(self):
+        return settings.MOMO_API_KEY
 
     def _get_access_token(self, product='collection') -> str | None:
         """Obtain a short-lived Bearer token for the given product (collection/disbursement)."""
