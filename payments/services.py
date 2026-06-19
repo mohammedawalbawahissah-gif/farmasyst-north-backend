@@ -25,6 +25,15 @@ class MoMoService:
     def API_KEY(self):
         return settings.MOMO_API_KEY
 
+    @property
+    def CURRENCY(self):
+        """
+        MTN's sandbox only accepts EUR for test transactions — GHS is
+        rejected there with INVALID_CURRENCY, even on a Ghana-market
+        subscription. GHS only works once MOMO_ENVIRONMENT=production.
+        """
+        return 'EUR' if settings.MOMO_ENVIRONMENT == 'sandbox' else 'GHS'
+
     def _get_access_token(self, product='collection') -> str | None:
         """Obtain a short-lived Bearer token for the given product (collection/disbursement)."""
         import base64
@@ -87,7 +96,7 @@ class MoMoService:
 
         payload = {
             'amount': amount,
-            'currency': 'GHS',
+            'currency': self.CURRENCY,
             'externalId': reference,
             'payer': {'partyIdType': 'MSISDN', 'partyId': phone},
             'payerMessage': narration,
@@ -121,7 +130,7 @@ class MoMoService:
         token  = self._get_access_token('disbursement')
         payload = {
             'amount': amount,
-            'currency': 'GHS',
+            'currency': self.CURRENCY,
             'externalId': reference,
             'payee': {'partyIdType': 'MSISDN', 'partyId': phone},
             'payerMessage': narration,
