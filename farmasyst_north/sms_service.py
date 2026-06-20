@@ -11,7 +11,28 @@ africastalking.initialize(
 sms = africastalking.SMS
 
 
+def _normalize_gh_phone(phone: str) -> str:
+    """Convert local Ghana format (0XXXXXXXXX) to E.164 (+233XXXXXXXXX).
+
+    Africa's Talking rejects local-format numbers outright, so every
+    outbound SMS must be normalized before it reaches the API. This is
+    applied once, here, so every caller in this file is covered
+    automatically.
+    """
+    phone = (phone or "").strip().replace(" ", "")
+    if phone.startswith("+233"):
+        return phone
+    if phone.startswith("233"):
+        return "+" + phone
+    if phone.startswith("0"):
+        return "+233" + phone[1:]
+    if phone.startswith("+"):
+        return phone
+    return "+233" + phone
+
+
 def _send(recipients, message):
+    recipients = [_normalize_gh_phone(p) for p in recipients]
     try:
         response = sms.send(message, recipients)
         logger.info("SMS sent: %s", response)
