@@ -52,7 +52,8 @@ class Produce(models.Model):
     status       = models.CharField(max_length=20, choices=ListingStatus.choices, default=ListingStatus.ACTIVE)
     # Seller contact & payment preferences
     contact_phone       = models.CharField(max_length=20, blank=True, help_text='Phone number buyers can reach the seller on')
-    accepts_momo        = models.BooleanField(default=True,  help_text='Accept MTN Mobile Money')
+    accepts_momo        = models.BooleanField(default=True,  help_text='Accept MTN Mobile Money (Direct)')
+    accepts_hubtel_momo = models.BooleanField(default=False, help_text='Accept Mobile Money via Hubtel — MTN, Telecel, AirtelTigo')
     accepts_card        = models.BooleanField(default=False, help_text='Accept Card via Hubtel')
     accepts_bank_transfer = models.BooleanField(default=False, help_text='Accept Bank Transfer')
     accepts_cod         = models.BooleanField(default=True,  help_text='Accept Cash on Delivery')
@@ -86,7 +87,8 @@ class Order(models.Model):
         DELIVERY = 'delivery', 'Home Delivery'
 
     class PaymentMethod(models.TextChoices):
-        MOMO             = 'momo',             'MTN Mobile Money'
+        MOMO             = 'momo',             'MTN Mobile Money (Direct)'
+        HUBTEL_MOMO      = 'hubtel_momo',       'Mobile Money — Other Networks (Hubtel)'
         CARD             = 'card',             'Card (Hubtel)'
         BANK_TRANSFER    = 'bank_transfer',    'Bank Transfer'
         CASH_ON_DELIVERY = 'cash_on_delivery', 'Cash on Delivery'

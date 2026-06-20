@@ -83,7 +83,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         raw_pm = data.get('payment_method', 'momo')
         pm_map = {
             'instant': 'momo', 'momo': 'momo',
-            'card': 'card', 'paystack': 'card',
+            'hubtel_momo': 'hubtel_momo',
+            'card': 'card', 'paystack': 'card', 'hubtel': 'card',
             'bank_transfer': 'bank_transfer',
             'cod': 'cash_on_delivery', 'cash_on_delivery': 'cash_on_delivery',
         }
@@ -175,14 +176,16 @@ class OrderViewSet(viewsets.ModelViewSet):
         """
         Initiate real payment for an existing order.
 
-        For MoMo: sends a mobile money prompt to the buyer's phone.
+        For MoMo: sends a mobile money prompt to the buyer's phone (MTN direct).
+        For hubtel_momo: redirects to Hubtel Checkout for Telecel/AirtelTigo/MTN
+                   mobile money — checkout_url to redirect the buyer to.
         For card:  initializes a Hubtel Checkout transaction and returns the
                    checkout_url to redirect the buyer to.
         For bank_transfer: returns bank account details.
         For cash_on_delivery: no-op (confirm immediately).
 
         Request body:
-          - phone_number  (str, required for momo)
+          - phone_number  (str, required for momo and hubtel_momo)
         """
         order = self.get_object()
 
@@ -269,43 +272,58 @@ class OrderViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-        # ── Card via Hubtel Checkout ─────────────────────────────────────────
-        if payment_method == 'card':
+        # ── Card or Mobile Money (Other Networks) via Hubtel Checkout ────────
+        if payment_method in ('card', 'hubtel_momo'):
+            payee_mobile = ''
+            if payment_method == 'hubtel_momo':
+                payee_mobile = request.data.get('phone_number', '').strip()
+                if not payee_mobile or len(payee_mobile) < 10:
+                    return Response(
+                        {'detail': 'A valid Mobile Money number is required.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
             frontend_base = getattr(settings, 'FRONTEND_URL', 'https://farmasyst-north-frontend.onrender.com')
             return_url       = f'{frontend_base}/consumer/orders?ref={order.reference}'
             cancellation_url = f'{frontend_base}/consumer/marketplace'
+            description = (
+                f'FarmAsyst order {order.reference}' if payment_method == 'card'
+                else f'FarmAsyst order {order.reference} (Mobile Money)'
+            )
 
             result = hubtel_payment_service.initiate_checkout(
                 amount_ghs        = total,
-                description       = f'FarmAsyst order {order.reference}',
+                description       = description,
                 client_reference  = order.reference,
                 callback_url      = build_hubtel_callback_url(),
                 return_url        = return_url,
                 cancellation_url  = cancellation_url,
                 payee_name        = request.user.get_full_name() or '',
+                payee_mobile      = payee_mobile,
                 payee_email       = request.user.email or '',
             )
 
             if result.get('success'):
                 checkout_url = result.get('checkout_url', '')
+                title = 'Complete your card payment' if payment_method == 'card' else 'Complete your Mobile Money payment'
                 _notify(
                     recipient  = order.buyer,
                     notif_type = 'payment',
-                    title      = 'Complete your card payment',
+                    title      = title,
                     body       = f'Click the link to complete payment of GHS {total:,.2f} for order {order.reference}.',
                     data       = {'order_id': str(order.id), 'checkout_url': checkout_url},
                 )
                 return Response({
-                    'payment_method': 'card',
+                    'payment_method': payment_method,
                     'checkout_url':   checkout_url,
                     'checkout_id':    result.get('checkout_id', ''),
                     'reference':      order.reference,
-                    'message':        'Redirect the user to checkout_url to complete card payment via Hubtel.',
+                    'message':        'Redirect the user to checkout_url to complete payment via Hubtel.',
                     'order':          OrderSerializer(order).data,
                 })
             else:
                 return Response(
-                    {'detail': 'Could not initialize card payment. Please try again.',
+                    {'detail': 'Could not initialize payment. Please try again.',
                      'error':  result.get('detail') or result.get('error', '')},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
