@@ -15,6 +15,7 @@ from .serializers import (
     RejectDisbursementSerializer,
 )
 from .services import momo_service, paystack_service, build_momo_callback_url
+from .signals import send_payment_sms
 from accounts.permissions import IsAdmin, IsFarmer, IsInvestor, IsInvestorOrAdmin
 from notifications.utils import send_notification
 
@@ -362,6 +363,7 @@ class MoMoWebhookView(generics.GenericAPIView):
                 send_notification(item.produce.seller, 'payment',
                                   f'Payment received — {order.reference}',
                                   f'MoMo payment of GHS {float(order.total_amount):,.2f} confirmed for order {order.reference}. Please prepare the order.')
+            send_payment_sms(order, success=True, method='MoMo')
         else:
             order.status = 'cancelled'
             order.save(update_fields=['status', 'payment_reference'])
@@ -378,6 +380,7 @@ class MoMoWebhookView(generics.GenericAPIView):
             send_notification(order.buyer, 'payment',
                               'Payment failed',
                               f'Your MoMo payment for order {order.reference} was not approved. The order has been cancelled and the item put back in stock.')
+            send_payment_sms(order, success=False, method='MoMo')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ from .serializers import ProduceSerializer, OrderSerializer, ProduceReviewSerial
 from accounts.permissions import IsFarmer, IsAdmin
 from notifications.models import Notification
 from payments.services import momo_service, paystack_service, build_momo_callback_url
+from payments.signals import send_order_sms, send_payment_sms
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,8 @@ class OrderViewSet(viewsets.ModelViewSet):
             ),
             data={'order_id': str(order.id), 'order_reference': order.reference},
         )
+
+        send_order_sms(order)
 
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
@@ -336,6 +339,7 @@ class OrderViewSet(viewsets.ModelViewSet):
                 body       = f'Card payment of GHS {float(order.total_amount):,.2f} confirmed for order {order.reference}.',
                 data       = {'order_id': str(order.id)},
             ) if order.items.exists() else None
+            send_payment_sms(order, success=True, method='Card')
             return Response({
                 'status':  'confirmed',
                 'message': 'Payment verified and order confirmed.',

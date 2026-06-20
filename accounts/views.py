@@ -13,6 +13,7 @@ from .serializers import (UserSerializer, RegisterSerializer,
                           FarmerProfileSerializer, InvestorProfileSerializer,
                           ChangePasswordSerializer)
 from .permissions import IsAdmin, IsFarmer, IsInvestor
+from farmasyst_north.sms_service import notify_officer_assigned
 
 
 class RegisterView(generics.CreateAPIView):
@@ -33,17 +34,9 @@ class RegisterView(generics.CreateAPIView):
 
 
 class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """
-    Extends the default JWT login serializer with two additional checks:
-    1. The account must be active (is_active=True) — set by admin verification.
-    2. The account must be marked as verified (is_verified=True).
-    This prevents newly registered users from logging in before admin approval.
-    """
     def validate(self, attrs):
-        # Attempt normal credential validation first (raises 401 on bad password)
         data = super().validate(attrs)
         user = self.user
-
         if not user.is_active or not user.is_verified:
             raise AuthenticationFailed(
                 'Your account is pending verification. '
@@ -110,12 +103,6 @@ class InvestorProfileView(generics.RetrieveUpdateAPIView):
 
 
 class FarmerProfileListView(generics.ListAPIView):
-    """
-    List of farmer profiles — accessible to investors and admins.
-    Auto-creates profile rows for verified farmers who haven't filled one in yet,
-    so the browse-farmers page is never empty due to missing profile rows.
-    Supports ?search= (name/district/community/region) and ?region= filter.
-    """
     serializer_class = FarmerProfileSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
@@ -127,10 +114,8 @@ class FarmerProfileListView(generics.ListAPIView):
         if user.role == 'admin':
             target_users = User.objects.filter(role='farmer', is_active=True)
         else:
-            # Investors see verified farmers only
             target_users = User.objects.filter(role='farmer', is_active=True, is_verified=True)
 
-        # Ensure every qualifying farmer has a profile row
         for farmer in target_users:
             FarmerProfile.objects.get_or_create(user=farmer)
 
@@ -142,9 +127,6 @@ class FarmerProfileListView(generics.ListAPIView):
 
 
 class FarmerProfileDetailView(generics.RetrieveAPIView):
-    """Single farmer profile — readable by investors and admins.
-    Supports both /profiles/farmers/<int:pk>/ and /profiles/farmers/<uuid:user_id>/
-    """
     serializer_class = FarmerProfileSerializer
     permission_classes = [IsAuthenticated]
 
@@ -157,30 +139,22 @@ class FarmerProfileDetailView(generics.RetrieveAPIView):
         )
 
     def get_object(self):
-        # Support lookup by profile pk (int) OR by user UUID
         lookup = self.kwargs.get('pk') or self.kwargs.get('user_id')
         qs = self.get_queryset()
-        # Try integer pk first
         try:
             int(str(lookup))
             obj = qs.get(pk=lookup)
         except (ValueError, TypeError):
-            # It's a UUID — look up by user id
             obj = qs.get(user__id=lookup)
         self.check_object_permissions(self.request, obj)
         return obj
 
 
 class InvestorProfileListView(generics.ListAPIView):
-    """Admin-only list of all investors.
-    Creates a profile row on-the-fly for any investor user who has not filled
-    one in yet, so the Matching dropdown is never empty due to missing rows.
-    """
     serializer_class = InvestorProfileSerializer
     permission_classes = [IsAdmin]
 
     def get_queryset(self):
-        # Ensure every active investor user has a profile row
         for user in User.objects.filter(role='investor', is_active=True):
             InvestorProfile.objects.get_or_create(user=user)
         return InvestorProfile.objects.select_related('user').filter(
@@ -189,7 +163,6 @@ class InvestorProfileListView(generics.ListAPIView):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    """Admin-only user management."""
     queryset = User.objects.all().order_by('-date_joined')
     serializer_class = UserSerializer
     permission_classes = [IsAdmin]
@@ -207,6 +180,9 @@ class UserViewSet(viewsets.ModelViewSet):
             profile, _ = FarmerProfile.objects.get_or_create(user=user)
             profile.verification_status = 'verified'
             profile.save()
+        # SMS: notify monitoring officer if assigned
+        if user.role == 'monitoring_officer' and user.phone:
+            notify_officer_assigned(user.phone, user.get_full_name(), 'FarmAsyst North')
         return Response({'detail': f'{user.get_full_name()} verified and account activated.'})
 
     @action(detail=True, methods=['post'])

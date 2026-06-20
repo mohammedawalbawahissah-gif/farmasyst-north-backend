@@ -212,6 +212,9 @@ MOMO_CALLBACK_URL     = config('MOMO_CALLBACK_URL',     default='')
 # while testing in the sandbox; set it before going to production.
 MOMO_WEBHOOK_SECRET   = config('MOMO_WEBHOOK_SECRET',   default='')
 
+AFRICASTALKING_USERNAME = config('AFRICASTALKING_USERNAME', default='')
+AFRICASTALKING_API_KEY = config('AFRICASTALKING_API_KEY', default='')
+
 PAYSTACK_SECRET_KEY   = config('PAYSTACK_SECRET_KEY',   default='')
 PAYSTACK_PUBLIC_KEY   = config('PAYSTACK_PUBLIC_KEY',   default='')
 

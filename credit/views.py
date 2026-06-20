@@ -9,6 +9,7 @@ from .serializers import (CreditApplicationSerializer, CreditApplicationAdminSer
                           ApplicationDocumentSerializer, CreditAgreementSerializer)
 from accounts.permissions import IsFarmer, IsAdmin, IsInvestorOrAdmin, IsFarmerOrAdmin
 from notifications.utils import send_notification
+from credit.signals import send_credit_status_sms
 
 
 class CreditApplicationViewSet(viewsets.ModelViewSet):
@@ -23,7 +24,6 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         if user.role == 'admin':
             return CreditApplication.objects.all()
         if user.role == 'investor':
-            # Only show apps explicitly matched to this investor
             return CreditApplication.objects.filter(matched_investor=user)
         return CreditApplication.objects.none()
 
@@ -47,6 +47,7 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         app = self.get_object()
         if app.status != 'draft':
             return Response({'detail': 'Only draft applications can be submitted.'}, status=400)
+        old_status = app.status
         app.status = 'submitted'
         app.submitted_at = timezone.now()
         app.credit_score_at_submission = request.user.farmer_profile.credit_score if hasattr(request.user, 'farmer_profile') else 0
@@ -54,11 +55,13 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         send_notification(app.farmer, 'application_status',
                           'Application Submitted',
                           f'Your application {app.reference} has been submitted for review.')
+        send_credit_status_sms(app, old_status)
         return Response(CreditApplicationSerializer(app).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
     def approve(self, request, pk=None):
         app = self.get_object()
+        old_status = app.status
         app.status = 'approved'
         app.reviewer = request.user
         app.reviewer_notes = request.data.get('notes', '')
@@ -68,11 +71,13 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         send_notification(app.farmer, 'application_status',
                           'Application Approved 🎉',
                           f'Your application {app.reference} has been approved.')
+        send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
     def reject(self, request, pk=None):
         app = self.get_object()
+        old_status = app.status
         app.status = 'rejected'
         app.reviewer = request.user
         app.reviewer_notes = request.data.get('notes', '')
@@ -82,14 +87,15 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         send_notification(app.farmer, 'application_status',
                           'Application Not Approved',
                           f'Your application {app.reference} was not approved. Reason: {app.rejection_reason}')
+        send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
     def decline(self, request, pk=None):
-        """Admin declines/reverses an approved application back to under_review."""
         app = self.get_object()
         if app.status not in ('approved', 'matched'):
             return Response({'detail': 'Can only decline approved or matched applications.'}, status=400)
+        old_status = app.status
         app.status = 'under_review'
         app.matched_investor = None
         app.reviewer_notes = request.data.get('notes', app.reviewer_notes)
@@ -97,11 +103,11 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         send_notification(app.farmer, 'application_status',
                           'Application Under Review Again',
                           f'Your application {app.reference} is being re-reviewed.')
+        send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
     def match(self, request, pk=None):
-        """Admin matches an approved application to a specific investor."""
         app = self.get_object()
         if app.status not in ('approved', 'scored', 'submitted', 'under_review'):
             return Response({'detail': 'Application cannot be matched at this stage.'}, status=400)
@@ -113,6 +119,7 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
             investor = User.objects.get(id=investor_id, role='investor')
         except User.DoesNotExist:
             return Response({'detail': 'Investor not found.'}, status=404)
+        old_status = app.status
         app.matched_investor = investor
         app.status = 'matched'
         app.save()
@@ -122,18 +129,17 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         send_notification(investor, 'new_opportunity',
                           'New Investment Opportunity',
                           f'A new farmer application has been matched to you. Check your Opportunities page.')
+        send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin])
     def accept(self, request, pk=None):
-        """Investor accepts a matched opportunity — creates CreditAgreement."""
         app = self.get_object()
         user = request.user
         if app.status != 'matched':
             return Response({'detail': 'Application is not in matched status.'}, status=400)
         if user.role == 'investor' and app.matched_investor != user:
             return Response({'detail': 'This application is not matched to you.'}, status=403)
-        # Create agreement
         agreement = CreditAgreement.objects.create(
             application=app,
             investor=app.matched_investor,
@@ -142,26 +148,29 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
             amount=app.amount_requested or 0,
             repayment_period_months=app.repayment_period_months or 12,
         )
-        app.status = 'approved'
+        old_status = app.status
+        app.status = 'agreement'
         app.save()
         send_notification(app.farmer, 'agreement_created',
                           'Contract Ready for Signature',
                           f'An investment agreement for {app.reference} is ready for your signature.')
+        send_credit_status_sms(app, old_status)
         return Response(CreditAgreementSerializer(agreement).data, status=201)
 
     @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin])
     def decline_match(self, request, pk=None):
-        """Investor declines a matched opportunity."""
         app = self.get_object()
         user = request.user
         if user.role == 'investor' and app.matched_investor != user:
             return Response({'detail': 'This application is not matched to you.'}, status=403)
+        old_status = app.status
         app.status = 'approved'
         app.matched_investor = None
         app.save()
         send_notification(app.farmer, 'application_status',
                           'Re-matching in Progress',
                           f'Your application {app.reference} is being re-matched to another investor.')
+        send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
 
@@ -202,17 +211,17 @@ class CreditAgreementViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'detail': 'Not authorised to sign this contract.'}, status=403)
         if agreement.farmer_signed_at and agreement.investor_signed_at:
             agreement.status = 'active'
-            # Update the linked application to disbursed when both parties sign
             app = agreement.application
-            if app.status not in ('disbursed',):
+            if app.status != 'disbursed':
+                old_status = app.status
                 app.status = 'disbursed'
                 app.save()
+                send_credit_status_sms(app, old_status)
         agreement.save()
         return Response(CreditAgreementSerializer(agreement).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def generate_document(self, request, pk=None):
-        """Generate a plain-text e-contract document for the agreement."""
         agreement = self.get_object()
         user = request.user
         if user not in (agreement.farmer, agreement.investor) and user.role != 'admin':
@@ -220,7 +229,6 @@ class CreditAgreementViewSet(viewsets.ReadOnlyModelViewSet):
         if agreement.contract_document:
             return Response(CreditAgreementSerializer(agreement).data)
 
-        # Build a simple text contract
         lines = [
             "FARMASYST NORTH — INVESTMENT AGREEMENT",
             "=" * 50,
