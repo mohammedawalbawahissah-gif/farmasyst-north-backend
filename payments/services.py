@@ -218,6 +218,99 @@ class HubtelSMSService:
             return {'success': False, 'error': str(e)}
 
 
+class HubtelPaymentService:
+    """
+    Hubtel Online Checkout — replaces Paystack for card payments.
+
+    Uses Hubtel's documented Checkout API (payproxyapi.hubtel.com), which
+    is a *separate* Hubtel product from the SMS API above and needs its
+    own merchant-payment credentials (HUBTEL_PAYMENT_CLIENT_ID/SECRET +
+    HUBTEL_MERCHANT_ACCOUNT_NUMBER), issued once your Hubtel merchant
+    payment account is approved.
+
+    Docs: https://businessdocs-developers.hubtel.com/docs/api-reference-online-checkout
+
+    Note on verification: Hubtel's primary confirmation path is the
+    callback webhook (POSTed to `callback_url` once payment completes),
+    handled by HubtelWebhookView in views.py — mirroring how the existing
+    MoMo webhook already works in this codebase. Hubtel's own docs say a
+    direct status-check call is only "mandatory" as a fallback if no
+    webhook has arrived after 5 minutes; that status-check endpoint isn't
+    wired up yet, so `initiate_checkout` + the webhook is the supported
+    path for now.
+    """
+
+    BASE_URL = 'https://payproxyapi.hubtel.com'
+
+    def _headers(self):
+        import base64
+        creds = base64.b64encode(
+            f'{settings.HUBTEL_PAYMENT_CLIENT_ID}:{settings.HUBTEL_PAYMENT_CLIENT_SECRET}'.encode()
+        ).decode()
+        return {
+            'Authorization': f'Basic {creds}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        }
+
+    def initiate_checkout(self, amount_ghs: float, description: str, client_reference: str,
+                          callback_url: str, return_url: str, cancellation_url: str,
+                          payee_name: str = '', payee_mobile: str = '', payee_email: str = '') -> dict:
+        if not settings.HUBTEL_PAYMENT_CLIENT_ID or not settings.HUBTEL_PAYMENT_CLIENT_SECRET:
+            logger.error('Hubtel checkout aborted for reference=%s: payment credentials not configured '
+                        '(HUBTEL_PAYMENT_CLIENT_ID/SECRET/HUBTEL_MERCHANT_ACCOUNT_NUMBER)', client_reference)
+            return {
+                'success': False,
+                'error': 'hubtel_payment_not_configured',
+                'detail': 'Hubtel payment credentials are not set. The merchant payment account may still '
+                          'be pending approval — check HUBTEL_PAYMENT_CLIENT_ID / HUBTEL_PAYMENT_CLIENT_SECRET '
+                          '/ HUBTEL_MERCHANT_ACCOUNT_NUMBER.',
+            }
+
+        payload = {
+            'totalAmount': float(amount_ghs),
+            'description': description,
+            'callbackUrl': callback_url,
+            'returnUrl': return_url,
+            'cancellationUrl': cancellation_url,
+            'merchantAccountNumber': settings.HUBTEL_MERCHANT_ACCOUNT_NUMBER,
+            'clientReference': client_reference[:32],  # Hubtel caps this at 32 chars
+        }
+        if payee_name:
+            payload['payeeName'] = payee_name
+        if payee_mobile:
+            payload['payeeMobileNumber'] = payee_mobile
+        if payee_email:
+            payload['payeeEmail'] = payee_email
+
+        try:
+            resp = requests.post(
+                f'{self.BASE_URL}/items/initiate',
+                json=payload,
+                headers=self._headers(),
+                timeout=30,
+            )
+            data = resp.json() if resp.content else {}
+            if resp.status_code == 200 and data.get('responseCode') == '0000':
+                checkout_data = data.get('data', {})
+                return {
+                    'success': True,
+                    'checkout_url': checkout_data.get('checkoutUrl', ''),
+                    'checkout_id': checkout_data.get('checkoutId', ''),
+                    'checkout_direct_url': checkout_data.get('checkoutDirectUrl', ''),
+                }
+            logger.error('Hubtel checkout rejected for reference=%s: status=%s body=%s',
+                        client_reference, resp.status_code, resp.text[:500])
+            return {
+                'success': False,
+                'status_code': resp.status_code,
+                'error': data.get('message') or resp.text or f'Hubtel returned HTTP {resp.status_code}',
+            }
+        except requests.RequestException as e:
+            logger.error('Hubtel checkout raised for reference=%s: %s', client_reference, e)
+            return {'success': False, 'error': str(e)}
+
+
 def build_momo_callback_url() -> str:
     """
     Build the X-Callback-Url MTN will POST the final payment status to.
@@ -234,6 +327,12 @@ def build_momo_callback_url() -> str:
     return base
 
 
+def build_hubtel_callback_url() -> str:
+    """Build the callbackUrl Hubtel will POST the final checkout status to."""
+    return f"{settings.BACKEND_URL.rstrip('/')}/api/v1/webhooks/hubtel/"
+
+
 momo_service    = MoMoService()
 paystack_service = PaystackService()
 sms_service     = HubtelSMSService()
+hubtel_payment_service = HubtelPaymentService()

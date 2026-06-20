@@ -222,6 +222,13 @@ HUBTEL_CLIENT_ID      = config('HUBTEL_CLIENT_ID',      default='')
 HUBTEL_CLIENT_SECRET  = config('HUBTEL_CLIENT_SECRET',  default='')
 HUBTEL_SENDER_ID      = config('HUBTEL_SENDER_ID',      default='FarmAsyst')
 
+# Hubtel Payments (Online Checkout) — separate product from Hubtel SMS above.
+# Issued only once your Hubtel merchant payment account is approved:
+# https://unity.hubtel.com/merchantaccount/dashboard
+HUBTEL_PAYMENT_CLIENT_ID       = config('HUBTEL_PAYMENT_CLIENT_ID',       default='')
+HUBTEL_PAYMENT_CLIENT_SECRET   = config('HUBTEL_PAYMENT_CLIENT_SECRET',   default='')
+HUBTEL_MERCHANT_ACCOUNT_NUMBER = config('HUBTEL_MERCHANT_ACCOUNT_NUMBER', default='')
+
 TWILIO_ACCOUNT_SID    = config('TWILIO_ACCOUNT_SID',    default='')
 TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN',     default='')
 TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER',    default='')

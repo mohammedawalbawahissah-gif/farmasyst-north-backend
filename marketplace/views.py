@@ -11,8 +11,8 @@ from .models import Produce, Order, OrderItem, ProduceReview
 from .serializers import ProduceSerializer, OrderSerializer, ProduceReviewSerializer
 from accounts.permissions import IsFarmer, IsAdmin
 from notifications.models import Notification
-from payments.services import momo_service, paystack_service, build_momo_callback_url
-from payments.signals import send_order_sms, send_payment_sms
+from payments.services import momo_service, hubtel_payment_service, build_momo_callback_url, build_hubtel_callback_url
+from payments.signals import send_order_sms
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +176,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         Initiate real payment for an existing order.
 
         For MoMo: sends a mobile money prompt to the buyer's phone.
-        For card:  initializes a Paystack transaction and returns the
-                   authorization_url to redirect the buyer to.
+        For card:  initializes a Hubtel Checkout transaction and returns the
+                   checkout_url to redirect the buyer to.
         For bank_transfer: returns bank account details.
         For cash_on_delivery: no-op (confirm immediately).
 
@@ -269,40 +269,44 @@ class OrderViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
-        # ── Card via Paystack ─────────────────────────────────────────────────
+        # ── Card via Hubtel Checkout ─────────────────────────────────────────
         if payment_method == 'card':
             frontend_base = getattr(settings, 'FRONTEND_URL', 'https://farmasyst-north-frontend.onrender.com')
-            callback_url  = f'{frontend_base}/consumer/orders?ref={order.reference}'
+            return_url       = f'{frontend_base}/consumer/orders?ref={order.reference}'
+            cancellation_url = f'{frontend_base}/consumer/marketplace'
 
-            result = paystack_service.initialize_transaction(
-                email        = request.user.email,
-                amount_ghs   = total,
-                reference    = order.reference,
-                callback_url = callback_url,
+            result = hubtel_payment_service.initiate_checkout(
+                amount_ghs        = total,
+                description       = f'FarmAsyst order {order.reference}',
+                client_reference  = order.reference,
+                callback_url      = build_hubtel_callback_url(),
+                return_url        = return_url,
+                cancellation_url  = cancellation_url,
+                payee_name        = request.user.get_full_name() or '',
+                payee_email       = request.user.email or '',
             )
 
             if result.get('success'):
-                auth_url = result['data'].get('authorization_url', '')
-                access_code = result['data'].get('access_code', '')
+                checkout_url = result.get('checkout_url', '')
                 _notify(
                     recipient  = order.buyer,
                     notif_type = 'payment',
                     title      = 'Complete your card payment',
                     body       = f'Click the link to complete payment of GHS {total:,.2f} for order {order.reference}.',
-                    data       = {'order_id': str(order.id), 'authorization_url': auth_url},
+                    data       = {'order_id': str(order.id), 'checkout_url': checkout_url},
                 )
                 return Response({
-                    'payment_method':    'card',
-                    'authorization_url': auth_url,
-                    'access_code':       access_code,
-                    'reference':         order.reference,
-                    'message':           'Redirect the user to authorization_url to complete card payment.',
-                    'order':             OrderSerializer(order).data,
+                    'payment_method': 'card',
+                    'checkout_url':   checkout_url,
+                    'checkout_id':    result.get('checkout_id', ''),
+                    'reference':      order.reference,
+                    'message':        'Redirect the user to checkout_url to complete card payment via Hubtel.',
+                    'order':          OrderSerializer(order).data,
                 })
             else:
                 return Response(
                     {'detail': 'Could not initialize card payment. Please try again.',
-                     'error':  result.get('error', '')},
+                     'error':  result.get('detail') or result.get('error', '')},
                     status=status.HTTP_502_BAD_GATEWAY,
                 )
 
@@ -311,44 +315,38 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='verify_payment')
     def verify_payment(self, request, pk=None):
         """
-        Verify a card payment after Paystack redirects back.
-        Called by the frontend after buyer returns from Paystack checkout.
+        Check the current status of a card order after the buyer returns
+        from the Hubtel checkout page (via returnUrl).
+
+        Real confirmation happens asynchronously via HubtelWebhookView,
+        same as the MoMo flow — this endpoint just reports whatever the
+        order's status is by the time the buyer lands back on the site.
+        If the webhook hasn't arrived yet (rare — Hubtel's docs say allow
+        up to 5 minutes), this will report 'pending' and the frontend
+        should poll or prompt the user to wait briefly.
 
         Request body:
-          - reference  (str) — the Paystack transaction reference (= order.reference)
+          - reference  (str, optional) — included for compatibility, not
+                       currently used since lookup is by order id.
         """
         order = self.get_object()
-        reference = request.data.get('reference') or order.reference
 
-        result = paystack_service.verify_transaction(reference)
-
-        if result.get('success') and result.get('data', {}).get('status') == 'success':
-            order.status = 'confirmed'
-            order.save(update_fields=['status'])
-            _notify(
-                recipient  = order.buyer,
-                notif_type = 'payment',
-                title      = 'Payment confirmed ✅',
-                body       = f'Your payment of GHS {float(order.total_amount):,.2f} for order {order.reference} was confirmed.',
-                data       = {'order_id': str(order.id)},
-            )
-            _notify(
-                recipient  = order.items.first().produce.seller if order.items.exists() else None,
-                notif_type = 'payment',
-                title      = f'Payment received — {order.reference}',
-                body       = f'Card payment of GHS {float(order.total_amount):,.2f} confirmed for order {order.reference}.',
-                data       = {'order_id': str(order.id)},
-            ) if order.items.exists() else None
-            send_payment_sms(order, success=True, method='Card')
+        if order.status == 'confirmed':
             return Response({
                 'status':  'confirmed',
                 'message': 'Payment verified and order confirmed.',
                 'order':   OrderSerializer(order).data,
             })
+        elif order.status == 'cancelled':
+            return Response(
+                {'detail': 'Payment was not approved. The order has been cancelled.',
+                 'status': 'cancelled'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         else:
             return Response(
-                {'detail': 'Payment not yet confirmed or verification failed.',
-                 'paystack_status': result.get('data', {}).get('status', 'unknown')},
+                {'detail': 'Payment not yet confirmed. If you just paid, please wait a few moments and check again.',
+                 'status': 'pending'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

@@ -14,7 +14,7 @@ from .serializers import (
     DisbursementRequestSerializer, ApproveDisbursementSerializer,
     RejectDisbursementSerializer,
 )
-from .services import momo_service, paystack_service, build_momo_callback_url
+from .services import momo_service, paystack_service, hubtel_payment_service, build_momo_callback_url
 from .signals import send_payment_sms, send_repayment_sms
 from accounts.permissions import IsAdmin, IsFarmer, IsInvestor, IsInvestorOrAdmin
 from notifications.utils import send_notification
@@ -385,6 +385,96 @@ class MoMoWebhookView(generics.GenericAPIView):
                               'Payment failed',
                               f'Your MoMo payment for order {order.reference} was not approved. The order has been cancelled and the item put back in stock.')
             send_payment_sms(order, success=False, method='MoMo')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hubtel Checkout Webhook (replaces Paystack for card payments)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HubtelWebhookView(generics.GenericAPIView):
+    """
+    Receives the payment-status callback Hubtel POSTs once a buyer completes
+    (or cancels) an Online Checkout payment initiated via
+    hubtel_payment_service.initiate_checkout().
+
+    Expected Hubtel payload (confirmed shape from Hubtel's own docs):
+        {
+          "ResponseCode": "0000",
+          "Status": "Success",
+          "Data": {
+            "CheckoutId": "...",
+            "SalesInvoiceId": "...",
+            "ClientReference": "<our Order.reference>",
+            "Status": "Success" | "Failed" | "Unpaid" | ...,
+            "Amount": 0.5,
+            "CustomerPhoneNumber": "233...",
+            "PaymentDetails": {...},
+            "Description": "..."
+          }
+        }
+
+    `ClientReference` is what we pass as `client_reference` in
+    initiate_checkout(), i.e. the marketplace Order.reference — mirroring
+    how MoMoWebhookView above matches on externalId.
+
+    Note: unlike the MoMo webhook, this only handles marketplace Order
+    payments (the Card option on the consumer order page) since that's
+    the only flow currently switched over to Hubtel. Repayments still use
+    Paystack via PaystackWebhookView above.
+    """
+    permission_classes = []
+
+    def post(self, request):
+        data = request.data
+        inner = data.get('Data', {})
+        client_reference = (inner.get('ClientReference') or '').strip()
+        hubtel_status = (inner.get('Status') or '').strip().lower()
+
+        if not client_reference:
+            return Response({'status': 'ignored', 'detail': 'No ClientReference in payload.'})
+
+        # Imported here to avoid a module-level payments <-> marketplace cycle,
+        # same pattern as MoMoWebhookView._handle_order above.
+        from marketplace.models import Order
+        order = Order.objects.filter(reference=client_reference).first()
+        if not order:
+            return Response({'status': 'ignored', 'detail': 'No matching order.'})
+
+        if order.status in ('confirmed', 'cancelled'):
+            return Response({'status': 'ok'})  # already processed — Hubtel can retry callbacks
+
+        sales_invoice_id = inner.get('SalesInvoiceId', '')
+        order.payment_reference = sales_invoice_id or order.payment_reference
+
+        if hubtel_status == 'success':
+            order.status = 'confirmed'
+            order.save(update_fields=['status', 'payment_reference'])
+
+            send_notification(order.buyer, 'payment',
+                              'Payment confirmed ✅',
+                              f'Your GHS {float(order.total_amount):,.2f} Hubtel payment for order {order.reference} was confirmed.')
+            for item in order.items.select_related('produce__seller'):
+                send_notification(item.produce.seller, 'payment',
+                                  f'Payment received — {order.reference}',
+                                  f'Hubtel payment of GHS {float(order.total_amount):,.2f} confirmed for order {order.reference}. Please prepare the order.')
+            send_payment_sms(order, success=True, method='Hubtel')
+        else:
+            order.status = 'cancelled'
+            order.save(update_fields=['status', 'payment_reference'])
+
+            for item in order.items.select_related('produce'):
+                produce = item.produce
+                produce.quantity_available = produce.quantity_available + item.quantity
+                if produce.status == 'sold_out':
+                    produce.status = 'active'
+                produce.save(update_fields=['quantity_available', 'status'])
+
+            send_notification(order.buyer, 'payment',
+                              'Payment failed',
+                              f'Your Hubtel payment for order {order.reference} was not approved. The order has been cancelled and the item put back in stock.')
+            send_payment_sms(order, success=False, method='Hubtel')
+
+        return Response({'status': 'ok'})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

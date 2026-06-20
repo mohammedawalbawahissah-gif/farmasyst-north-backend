@@ -53,7 +53,7 @@ class Produce(models.Model):
     # Seller contact & payment preferences
     contact_phone       = models.CharField(max_length=20, blank=True, help_text='Phone number buyers can reach the seller on')
     accepts_momo        = models.BooleanField(default=True,  help_text='Accept MTN Mobile Money')
-    accepts_card        = models.BooleanField(default=False, help_text='Accept Card via Paystack')
+    accepts_card        = models.BooleanField(default=False, help_text='Accept Card via Hubtel')
     accepts_bank_transfer = models.BooleanField(default=False, help_text='Accept Bank Transfer')
     accepts_cod         = models.BooleanField(default=True,  help_text='Accept Cash on Delivery')
 
@@ -87,7 +87,7 @@ class Order(models.Model):
 
     class PaymentMethod(models.TextChoices):
         MOMO             = 'momo',             'MTN Mobile Money'
-        CARD             = 'card',             'Card (Paystack)'
+        CARD             = 'card',             'Card (Hubtel)'
         BANK_TRANSFER    = 'bank_transfer',    'Bank Transfer'
         CASH_ON_DELIVERY = 'cash_on_delivery', 'Cash on Delivery'
 
