@@ -1,4 +1,3 @@
-# payments/signals.py
 from farmasyst_north.sms_service import (
     notify_consumer_order_placed,
     notify_farmer_new_order,
@@ -8,7 +7,6 @@ from farmasyst_north.sms_service import (
 
 
 def send_order_sms(order):
-    """Call this after an Order is created in marketplace/views.py."""
     buyer_phone = order.buyer.phone
     if buyer_phone:
         notify_consumer_order_placed(
@@ -16,8 +14,6 @@ def send_order_sms(order):
             order.reference,
             float(order.total_amount),
         )
-
-    # Notify each seller via their item's produce.seller
     sellers_notified = set()
     for item in order.items.select_related('produce__seller').all():
         seller = item.produce.seller
@@ -32,7 +28,6 @@ def send_order_sms(order):
 
 
 def send_payment_sms(order, success: bool, method: str = None):
-    """Call this after payment callback in payments/views.py."""
     phone = order.buyer.phone
     if not phone:
         return

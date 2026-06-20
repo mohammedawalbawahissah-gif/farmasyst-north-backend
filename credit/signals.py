@@ -1,4 +1,3 @@
-# credit/signals.py
 import farmasyst_north.sms_service as svc
 
 CREDIT_SMS_MAP = {
@@ -12,13 +11,6 @@ CREDIT_SMS_MAP = {
 
 
 def send_credit_status_sms(application, old_status: str):
-    """
-    Call in credit/views.py after saving a status change:
-        old_status = application.status
-        application.status = new_status
-        application.save()
-        send_credit_status_sms(application, old_status)
-    """
     new_status = application.status
     if new_status == old_status:
         return

@@ -17,6 +17,7 @@ class CreditApplication(models.Model):
         SCORED       = 'scored',       'Scored'
         MATCHED      = 'matched',      'Matched to Investor'
         APPROVED     = 'approved',     'Approved'
+        AGREEMENT    = 'agreement',    'Agreement Pending'
         DISBURSED    = 'disbursed',    'Disbursed'
         REJECTED     = 'rejected',     'Rejected'
         WITHDRAWN    = 'withdrawn',    'Withdrawn'
@@ -76,7 +77,6 @@ class ApplicationDocument(models.Model):
 
 
 class CreditAgreement(models.Model):
-    """Active credit agreement after approval and contract signing."""
     class AgreementStatus(models.TextChoices):
         PENDING_SIGNATURE = 'pending_signature', 'Pending Signature'
         ACTIVE            = 'active',            'Active'
