@@ -15,7 +15,7 @@ from .serializers import (
     RejectDisbursementSerializer,
 )
 from .services import momo_service, paystack_service, build_momo_callback_url
-from .signals import send_payment_sms
+from .signals import send_payment_sms, send_repayment_sms
 from accounts.permissions import IsAdmin, IsFarmer, IsInvestor, IsInvestorOrAdmin
 from notifications.utils import send_notification
 
@@ -210,6 +210,7 @@ class PayFullBalanceView(generics.GenericAPIView):
                     'Full Balance Payment Initiated',
                     f'GHS {total} full settlement initiated via MoMo for agreement {agreement.reference}.',
                 )
+                send_repayment_sms(payment, success=True, method='MoMo')
 
         elif data['method'] == 'paystack':
             result = paystack_service.initialize_transaction(
@@ -258,6 +259,7 @@ class PaystackWebhookView(generics.GenericAPIView):
                 send_notification(payment.payer, 'repayment_received',
                                   'Repayment Confirmed ✅',
                                   f'GHS {payment.amount} payment received.')
+                send_repayment_sms(payment, success=True, method='Paystack')
             except Payment.DoesNotExist:
                 pass
         return Response({'status': 'ok'})
@@ -340,12 +342,14 @@ class MoMoWebhookView(generics.GenericAPIView):
             send_notification(payment.payer, 'repayment_received',
                               'Repayment Confirmed ✅',
                               f'GHS {payment.amount} MoMo payment received.')
+            send_repayment_sms(payment, success=True, method='MoMo')
         else:
             payment.status = 'failed'
             payment.save()
             send_notification(payment.payer, 'repayment_due',
                               'MoMo Payment Failed',
                               f'Your GHS {payment.amount} MoMo payment did not go through. Please try again.')
+            send_repayment_sms(payment, success=False)
 
     def _handle_order(self, order, momo_status, data):
         if order.status in ('confirmed', 'cancelled'):

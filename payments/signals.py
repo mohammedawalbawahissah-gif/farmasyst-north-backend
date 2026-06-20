@@ -3,6 +3,8 @@ from farmasyst_north.sms_service import (
     notify_farmer_new_order,
     notify_payment_success,
     notify_payment_failed,
+    notify_repayment_success,
+    notify_repayment_failed,
 )
 
 
@@ -40,3 +42,24 @@ def send_payment_sms(order, success: bool, method: str = None):
         )
     else:
         notify_payment_failed(phone, order.reference)
+
+
+def send_repayment_sms(payment, success: bool, method: str = None):
+    """SMS for credit repayment confirmations (InitiateRepaymentView,
+    PayFullBalanceView, PaystackWebhookView, MoMoWebhookView._handle_payment).
+
+    Uses the Payment model's fields (payer, amount, reference) — distinct
+    from send_payment_sms above, which is for marketplace Order objects.
+    """
+    phone = getattr(payment.payer, 'phone', None)
+    if not phone:
+        return
+    if success:
+        notify_repayment_success(
+            phone,
+            payment.reference,
+            float(payment.amount),
+            method or payment.method,
+        )
+    else:
+        notify_repayment_failed(phone, payment.reference)

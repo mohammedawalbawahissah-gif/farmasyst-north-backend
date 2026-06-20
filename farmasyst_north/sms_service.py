@@ -52,6 +52,12 @@ def notify_payment_success(phone, order_ref, amount, method):
 def notify_payment_failed(phone, order_ref):
     _send([phone], f"FarmAsyst: Payment for order #{order_ref} was not completed. Please retry or contact support.")
 
+def notify_repayment_success(phone, payment_ref, amount, method):
+    _send([phone], f"FarmAsyst: Repayment of GHS {amount:.2f} via {method} confirmed (ref #{payment_ref}). Thank you!")
+
+def notify_repayment_failed(phone, payment_ref):
+    _send([phone], f"FarmAsyst: Your repayment (ref #{payment_ref}) did not go through. Please retry or contact support.")
+
 def send_otp(phone, otp):
     _send([phone], f"FarmAsyst verification code: {otp}. Valid for 10 minutes. Do not share this code.")
 
