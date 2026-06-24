@@ -95,6 +95,15 @@ class FarmActivityLog(models.Model):
     eggs_collected = models.PositiveIntegerField(default=0)
     medication_given = models.TextField(blank=True)
     notes        = models.TextField(blank=True)
+
+    # Media: photo or short video of farm activity
+    media_file        = models.FileField(upload_to='farms/activity_media/', null=True, blank=True,
+                                         help_text='Photo or video of today\'s farm activity')
+    media_type        = models.CharField(max_length=10, blank=True, default='',
+                                         choices=[('image', 'Image'), ('video', 'Video')])
+    media_captured_at = models.DateTimeField(null=True, blank=True,
+                                             help_text='Timestamp when the media was captured')
+
     logged_by    = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at   = models.DateTimeField(auto_now_add=True)
 

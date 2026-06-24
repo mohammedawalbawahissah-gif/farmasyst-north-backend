@@ -12,7 +12,8 @@ from accounts.views import (RegisterView, LogoutView, MeView, ChangePasswordView
                              InvestorProfileListView,
                              UserViewSet, VerifiedTokenObtainPairView)
 from farms.views import FarmViewSet, FarmActivityLogViewSet, FarmAuditReportViewSet
-from credit.views import CreditApplicationViewSet, DocumentUploadView, CreditAgreementViewSet
+from credit.views import (CreditApplicationViewSet, DocumentUploadView, CreditAgreementViewSet,
+                           ProjectApplicationViewSet)
 from marketplace.views import ProduceViewSet, OrderViewSet, ProduceReviewViewSet
 from training.views import TrainingModuleViewSet, TrainingEnrolmentViewSet
 from notifications.views import NotificationViewSet
@@ -22,6 +23,7 @@ from payments.views import (RepaymentScheduleViewSet, InitiateRepaymentView,
                              DisbursementRequestViewSet, PayFullBalanceView)
 from vet.views import VetProfileViewSet, VetServiceViewSet, VetBookingViewSet
 from inputs.views import InputDealerProfileViewSet, FarmInputViewSet
+from ai.views import CreditworthinessView, DiseaseDetectionView, AIChatView
 
 router = DefaultRouter()
 router.register(r'users',               UserViewSet,              basename='users')
@@ -44,6 +46,7 @@ router.register(r'vet/services', VetServiceViewSet, basename='vet-services')
 router.register(r'vet/bookings', VetBookingViewSet, basename='vet-bookings')
 router.register(r'inputs/dealers',  InputDealerProfileViewSet, basename='input-dealers')
 router.register(r'inputs/listings', FarmInputViewSet,           basename='farm-inputs')
+router.register(r'credit/projects', ProjectApplicationViewSet,  basename='project-applications')
 
 urlpatterns = [
     path('health/',                        lambda r: JsonResponse({'status': 'ok'})),
@@ -76,5 +79,10 @@ urlpatterns = [
     path('api/v1/webhooks/paystack/',           PaystackWebhookView.as_view()),
     path('api/v1/webhooks/momo/',               MoMoWebhookView.as_view()),
     path('api/v1/webhooks/hubtel/',              HubtelWebhookView.as_view()),
+
+    # AI Engine
+    path('api/v1/ai/creditworthiness/',   CreditworthinessView.as_view()),
+    path('api/v1/ai/disease-detection/',  DiseaseDetectionView.as_view()),
+    path('api/v1/ai/chat/',               AIChatView.as_view()),
 
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

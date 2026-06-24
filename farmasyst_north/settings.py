@@ -40,6 +40,7 @@ LOCAL_APPS = [
     'payments',
     'vet',
     'inputs',
+    'ai',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -234,6 +235,9 @@ TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN',     default='')
 TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER',    default='')
 
 FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
+
+# Anthropic AI
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
 
 # Ensure payment-gateway errors (MoMo, Paystack, Hubtel, Twilio) actually
 # show up in `render logs` — Render captures stdout, so route everything

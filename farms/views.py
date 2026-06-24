@@ -112,7 +112,21 @@ class FarmActivityLogViewSet(viewsets.ModelViewSet):
         return [IsFarmerOrAdmin()]
 
     def perform_create(self, serializer):
-        serializer.save(logged_by=self.request.user)
+        from django.utils import timezone
+        media_file = self.request.FILES.get('media_file')
+        captured_at = None
+        if media_file:
+            # Use provided timestamp or default to now
+            raw_ts = self.request.data.get('media_captured_at')
+            if raw_ts:
+                try:
+                    from django.utils.dateparse import parse_datetime
+                    captured_at = parse_datetime(raw_ts)
+                except Exception:
+                    pass
+            if not captured_at:
+                captured_at = timezone.now()
+        serializer.save(logged_by=self.request.user, media_captured_at=captured_at)
 
 
 class FarmAuditReportViewSet(viewsets.ModelViewSet):

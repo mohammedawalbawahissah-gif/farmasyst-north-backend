@@ -272,3 +272,131 @@ class CreditAgreementViewSet(viewsets.ReadOnlyModelViewSet):
             f'The investment agreement {agreement.reference} is ready. Please review and sign.'
         )
         return Response(CreditAgreementSerializer(agreement).data)
+
+
+# ── Project Applications ──────────────────────────────────────────────────────
+
+from .models import ProjectApplication, ProjectFarmerEntry
+from .serializers import (ProjectApplicationSerializer, ProjectApplicationAdminSerializer,
+                           ProjectFarmerEntrySerializer)
+
+
+class ProjectApplicationViewSet(viewsets.ModelViewSet):
+    """
+    Organisation-based group credit applications (Projects).
+    Investors/organisations submit; admins review.
+    """
+    filter_backends  = [DjangoFilterBackend]
+    filterset_fields = ['status', 'credit_type']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'admin':
+            return ProjectApplication.objects.prefetch_related('farmer_entries').all()
+        if user.role == 'investor':
+            return ProjectApplication.objects.prefetch_related('farmer_entries').filter(submitted_by=user)
+        return ProjectApplication.objects.none()
+
+    def get_serializer_class(self):
+        if self.request.user.role == 'admin':
+            return ProjectApplicationAdminSerializer
+        return ProjectApplicationSerializer
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return [IsInvestorOrAdmin()]
+        if self.action in ('submit', 'withdraw'):
+            return [IsInvestorOrAdmin()]
+        return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        serializer.save(submitted_by=self.request.user)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin])
+    def submit(self, request, pk=None):
+        project = self.get_object()
+        if project.status != 'draft':
+            return Response({'detail': 'Only draft projects can be submitted.'}, status=400)
+        if not project.farmer_entries.exists():
+            return Response({'detail': 'Add at least one farmer entry before submitting.'}, status=400)
+        project.status = 'submitted'
+        project.submitted_at = timezone.now()
+        project.save()
+        from notifications.utils import notify_admins
+        notify_admins(
+            'project_submitted', f'Project Application Submitted: {project.project_name}',
+            f'{project.organisation} submitted project {project.reference} covering '
+            f'{project.farmer_entries.count()} farmer(s).',
+            priority='high',
+        )
+        return Response(ProjectApplicationSerializer(project).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def approve(self, request, pk=None):
+        project = self.get_object()
+        project.status = 'approved'
+        project.reviewer = request.user
+        project.reviewer_notes = request.data.get('notes', '')
+        project.reviewed_at = timezone.now()
+        project.save()
+        if project.submitted_by:
+            from notifications.utils import send_notification
+            send_notification(
+                project.submitted_by, 'project_status',
+                f'Project Approved: {project.project_name}',
+                f'Your project application {project.reference} has been approved.',
+            )
+        return Response(ProjectApplicationAdminSerializer(project).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def reject(self, request, pk=None):
+        project = self.get_object()
+        project.status = 'rejected'
+        project.reviewer = request.user
+        project.rejection_reason = request.data.get('reason', '')
+        project.reviewer_notes = request.data.get('notes', '')
+        project.reviewed_at = timezone.now()
+        project.save()
+        if project.submitted_by:
+            from notifications.utils import send_notification
+            send_notification(
+                project.submitted_by, 'project_status',
+                f'Project Not Approved: {project.project_name}',
+                f'Your project {project.reference} was not approved. Reason: {project.rejection_reason}',
+            )
+        return Response(ProjectApplicationAdminSerializer(project).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin])
+    def withdraw(self, request, pk=None):
+        project = self.get_object()
+        if project.status in ('approved', 'disbursed'):
+            return Response({'detail': 'Cannot withdraw an approved or disbursed project.'}, status=400)
+        project.status = 'withdrawn'
+        project.save()
+        return Response(ProjectApplicationSerializer(project).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin],
+            url_path='add_farmer')
+    def add_farmer(self, request, pk=None):
+        """Add a farmer entry to a draft project."""
+        project = self.get_object()
+        if project.status != 'draft':
+            return Response({'detail': 'Can only add farmers to draft projects.'}, status=400)
+        serializer = ProjectFarmerEntrySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(project=project)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['delete'], permission_classes=[IsInvestorOrAdmin],
+            url_path=r'remove_farmer/(?P<entry_id>[^/.]+)')
+    def remove_farmer(self, request, pk=None, entry_id=None):
+        """Remove a farmer entry from a draft project."""
+        project = self.get_object()
+        if project.status != 'draft':
+            return Response({'detail': 'Can only remove farmers from draft projects.'}, status=400)
+        try:
+            entry = ProjectFarmerEntry.objects.get(id=entry_id, project=project)
+            entry.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except ProjectFarmerEntry.DoesNotExist:
+            return Response({'detail': 'Farmer entry not found.'}, status=404)

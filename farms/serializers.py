@@ -35,11 +35,23 @@ class FarmSerializer(serializers.ModelSerializer):
 
 class FarmActivityLogSerializer(serializers.ModelSerializer):
     flock_count = serializers.ReadOnlyField()   # computed property: sum of all categories
+    media_file_url = serializers.SerializerMethodField()
 
     class Meta:
         model = FarmActivityLog
         fields = '__all__'
         read_only_fields = ['id', 'logged_by', 'created_at']
+
+    def get_media_file_url(self, obj):
+        if not obj.media_file:
+            return None
+        request = self.context.get('request')
+        url = obj.media_file.url
+        if request:
+            return request.build_absolute_uri(url)
+        from django.conf import settings as dj_settings
+        base = getattr(dj_settings, 'BACKEND_URL', '').rstrip('/')
+        return f'{base}{url}' if base else url
 
 
 class FarmAuditReportSerializer(serializers.ModelSerializer):
