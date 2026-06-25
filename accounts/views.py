@@ -11,7 +11,7 @@ from rest_framework import filters
 from .models import User, FarmerProfile, InvestorProfile
 from .serializers import (UserSerializer, RegisterSerializer,
                           FarmerProfileSerializer, InvestorProfileSerializer,
-                          ChangePasswordSerializer)
+                          ChangePasswordSerializer, ADMIN_VERIFIED_ROLES)
 from .permissions import IsAdmin, IsFarmer, IsInvestor
 from farmasyst_north.sms_service import notify_officer_assigned
 
@@ -24,12 +24,28 @@ class RegisterView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        user = serializer.save()
+
+        role = user.role
+
+        # Roles that require admin verification — return a pending message, no tokens
+        if role in ADMIN_VERIFIED_ROLES:
+            return Response({
+                'requires_verification': True,
+                'detail': (
+                    'Account created successfully. Your account requires admin approval before '
+                    'you can log in. A FarmAsyst North administrator will review and activate your account shortly.'
+                ),
+            }, status=status.HTTP_201_CREATED)
+
+        # All other roles — account is active, issue tokens for immediate login
+        refresh = RefreshToken.for_user(user)
         return Response({
-            'detail': (
-                'Account created successfully. Your account is pending admin verification. '
-                'You will be able to log in once a FarmAsyst North administrator approves your account.'
-            )
+            'requires_verification': False,
+            'detail': 'Account created successfully.',
+            'access':  str(refresh.access_token),
+            'refresh': str(refresh),
+            'user': UserSerializer(user, context={'request': request}).data,
         }, status=status.HTTP_201_CREATED)
 
 
@@ -37,11 +53,18 @@ class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
         user = self.user
-        if not user.is_active or not user.is_verified:
+
+        # Account suspended by admin
+        if not user.is_active:
             raise AuthenticationFailed(
-                'Your account is pending verification. '
-                'Please wait for a FarmAsyst North administrator to approve your account before logging in.'
+                'Your account has been suspended or is pending admin approval. '
+                'Please contact a FarmAsyst North administrator.'
             )
+
+        # is_verified is a soft admin-quality flag — don't use it as a login gate here.
+        # Roles that require admin verification already start with is_active=False,
+        # so the check above handles them correctly.
+
         return data
 
 
@@ -180,7 +203,6 @@ class UserViewSet(viewsets.ModelViewSet):
             profile, _ = FarmerProfile.objects.get_or_create(user=user)
             profile.verification_status = 'verified'
             profile.save()
-        # SMS: notify monitoring officer if assigned
         if user.role == 'monitoring_officer' and user.phone:
             notify_officer_assigned(user.phone, user.get_full_name(), 'FarmAsyst North')
         return Response({'detail': f'{user.get_full_name()} verified and account activated.'})
@@ -216,4 +238,7 @@ class UserViewSet(viewsets.ModelViewSet):
         profile.credit_score = score
         profile.credit_score_updated_at = timezone.now()
         profile.save()
-        return Response({'detail': f'Credit score updated to {score} for {user.get_full_name()}.', 'credit_score': str(score)})
+        return Response({
+            'detail': f'Credit score updated to {score} for {user.get_full_name()}.',
+            'credit_score': str(score),
+        })

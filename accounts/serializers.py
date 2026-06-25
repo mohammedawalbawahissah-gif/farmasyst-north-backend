@@ -34,6 +34,15 @@ class UserSerializer(serializers.ModelSerializer):
         return f'{base}{url}' if base else url
 
 
+# Roles that require an admin to manually verify before the account is usable.
+# All other roles (farmer, investor, consumer) are activated immediately.
+ADMIN_VERIFIED_ROLES = {
+    User.Role.MONITORING_OFFICER,
+    User.Role.VET,
+    User.Role.INPUT_DEALER,
+}
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     password  = serializers.CharField(write_only=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True)
@@ -56,8 +65,13 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('password2')
-        validated_data['is_active']   = False
-        validated_data['is_verified'] = False
+        role = validated_data.get('role')
+
+        # Roles that need admin approval start as inactive + unverified.
+        # Everyone else (farmer, investor, consumer) is active immediately.
+        requires_verification = role in ADMIN_VERIFIED_ROLES
+        validated_data['is_active']   = not requires_verification
+        validated_data['is_verified'] = False  # admin can mark verified later for all roles
         return User.objects.create_user(**validated_data)
 
 

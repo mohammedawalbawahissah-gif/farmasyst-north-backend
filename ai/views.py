@@ -4,8 +4,6 @@ import logging
 import requests
 from django.conf import settings
 from django.utils import timezone
-from rest_framework import status
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 ANTHROPIC_MODEL   = 'claude-sonnet-4-6'
+
+# MIME types that Claude vision supports as images
+SUPPORTED_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 
 
 def call_claude(system_prompt: str, messages: list, max_tokens: int = 1500) -> str:
@@ -41,40 +42,58 @@ def call_claude(system_prompt: str, messages: list, max_tokens: int = 1500) -> s
     return data['content'][0]['text']
 
 
-def _upload_to_cloudinary(file_data: bytes, filename: str, resource_type: str = 'image') -> dict:
-    """Upload bytes to Cloudinary and return the result dict."""
-    import cloudinary.uploader
-    result = cloudinary.uploader.upload(
-        file_data,
-        folder='farmasyst/disease-detection',
-        resource_type=resource_type,
-        public_id=None,  # auto-generate
+def build_disease_user_message(farm_context: dict, media_data: str | None, media_type: str | None) -> dict:
+    """
+    Build the user message for the disease detection API call.
+    If media is provided and is a supported image type, include it as a vision block.
+    Video frames are described in text only (Claude API does not yet accept video blobs).
+    """
+    text_content = (
+        f"Farm data:\n{json.dumps(farm_context, default=str, indent=2)}\n\n"
+        "Analyse for disease risk signals."
     )
-    return result
 
+    if not media_data:
+        return {'role': 'user', 'content': text_content}
 
-def _media_to_base64_block(file_data: bytes, mime_type: str) -> dict:
-    """Convert file bytes to an Anthropic vision content block."""
-    b64 = base64.b64encode(file_data).decode('utf-8')
-    return {
-        'type': 'image',
-        'source': {
-            'type': 'base64',
-            'media_type': mime_type,
-            'data': b64,
-        },
-    }
+    is_image = media_type in SUPPORTED_IMAGE_TYPES
 
-
-def _url_to_image_block(url: str) -> dict:
-    """Reference a public URL image for Anthropic vision."""
-    return {
-        'type': 'image',
-        'source': {
-            'type': 'url',
-            'url': url,
-        },
-    }
+    if is_image:
+        # Claude vision: send image alongside the text prompt
+        return {
+            'role': 'user',
+            'content': [
+                {
+                    'type': 'image',
+                    'source': {
+                        'type': 'base64',
+                        'media_type': media_type,
+                        'data': media_data,
+                    },
+                },
+                {
+                    'type': 'text',
+                    'text': (
+                        "The above image is a photo of the poultry farm or flock. "
+                        "Use visual cues (feather quality, posture, droppings, housing condition) "
+                        "alongside the farm log data below to assess disease risk.\n\n"
+                        + text_content
+                    ),
+                },
+            ],
+        }
+    else:
+        # Video — describe that media was submitted but note it's not directly analysable
+        return {
+            'role': 'user',
+            'content': (
+                "A video of the farm was submitted by the farmer. "
+                "While you cannot view the video directly, factor in that the farmer has "
+                "recorded live farm footage for this assessment, which may indicate active concern. "
+                "Analyse the log data below and note that a visual inspection video is available "
+                "for a vet follow-up.\n\n" + text_content
+            ),
+        }
 
 
 # ── Role-based system prompts ────────────────────────────────────────────────
@@ -165,7 +184,7 @@ class CreditworthinessView(APIView):
                     for l in recent_logs
                 ) or 1
                 total_mortality = sum(l.get('mortality', 0) or 0 for l in recent_logs)
-                mortality_rate = round((total_mortality / total_flock) * 100, 2) if total_flock else 0
+                mortality_rate = round((total_mortality / total_flock) * 100, 2)
 
                 farm_data.append({
                     'name': farm.name,
@@ -232,8 +251,8 @@ class CreditworthinessView(APIView):
             if clean.startswith('```'):
                 clean = clean.split('\n', 1)[1].rsplit('```', 1)[0].strip()
             result = json.loads(clean)
-            result['farmer_id'] = str(farmer_id)
-            result['farmer_name'] = farmer.get_full_name()
+            result['farmer_id']    = str(farmer_id)
+            result['farmer_name']  = farmer.get_full_name()
             result['generated_at'] = timezone.now().isoformat()
             return Response(result)
 
@@ -244,25 +263,31 @@ class CreditworthinessView(APIView):
             return Response({'detail': f'AI scoring failed: {exc}'}, status=500)
 
 
-# ── AI: Disease Detection Engine (with vision: camera capture + media upload) ─
+# ── AI: Disease Detection Engine ─────────────────────────────────────────────
 
 class DiseaseDetectionView(APIView):
-    """
-    Disease detection with three input modes:
-      1. Logs-only   — POST JSON: { farm_id }
-      2. Image/video file upload — multipart: farm_id + media[] files
-      3. Camera capture — POST JSON: { farm_id, images: [{data: "<base64>", mime_type: "image/jpeg"}] }
-
-    All modes combine activity log context with any supplied visual media.
-    For video uploads, Cloudinary stores the video and we pass a thumbnail URL.
-    """
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         farm_id = request.data.get('farm_id')
         if not farm_id:
             return Response({'detail': 'farm_id is required.'}, status=400)
+
+        # Optional media fields sent by the frontend
+        media_data    = request.data.get('media_data')    # base64 string, no data:// prefix
+        media_type    = request.data.get('media_type')    # e.g. image/jpeg, video/webm
+        capture_mode  = request.data.get('capture_mode')  # 'camera' or 'upload'
+
+        # Validate base64 payload size (limit to ~20MB decoded ≈ ~27MB base64)
+        if media_data and len(media_data) > 27_000_000:
+            return Response({'detail': 'Media file is too large. Please use a smaller image or shorter video clip.'}, status=400)
+
+        # Basic base64 integrity check
+        if media_data:
+            try:
+                base64.b64decode(media_data, validate=True)
+            except Exception:
+                return Response({'detail': 'Invalid media data encoding.'}, status=400)
 
         user = request.user
         try:
@@ -275,7 +300,7 @@ class DiseaseDetectionView(APIView):
             if user.role not in ('farmer', 'admin', 'monitoring_officer', 'vet'):
                 return Response({'detail': 'Permission denied.'}, status=403)
 
-            # ── Build log context ─────────────────────────────────────────
+            # Last 21 days of logs
             logs = list(
                 FarmActivityLog.objects.filter(farm=farm)
                 .order_by('-date')[:21]
@@ -286,6 +311,11 @@ class DiseaseDetectionView(APIView):
                     'local_cock_count', 'local_hen_count',
                 )
             )
+
+            if not logs:
+                return Response({
+                    'detail': 'No activity logs found for this farm. Start logging daily activity to enable disease detection.'
+                }, status=400)
 
             total_flock = sum(
                 (l.get('broiler_count', 0) or 0) + (l.get('layer_count', 0) or 0) +
@@ -309,6 +339,8 @@ class DiseaseDetectionView(APIView):
                 'analysis_period_days': len(logs),
                 'total_mortality': total_mortality,
                 'mortality_rate_pct': mortality_rate,
+                'media_submitted': bool(media_data),
+                'media_capture_mode': capture_mode or 'none',
                 'daily_logs': [
                     {
                         'date': str(l['date']),
@@ -324,92 +356,14 @@ class DiseaseDetectionView(APIView):
                 'farmer_observations': observation_notes,
             }
 
-            # ── Collect vision content blocks ─────────────────────────────
-            vision_blocks = []
-            has_media = False
-
-            # Mode A: uploaded files (multipart)
-            uploaded_files = request.FILES.getlist('media')
-            for f in uploaded_files:
-                file_data = f.read()
-                ctype = f.content_type or 'image/jpeg'
-                if ctype.startswith('video/'):
-                    # Upload video to Cloudinary, use the generated thumbnail URL
-                    try:
-                        result = _upload_to_cloudinary(file_data, f.name, resource_type='video')
-                        thumb_url = result.get('secure_url', '').replace('/upload/', '/upload/so_0/')
-                        # Convert to jpg thumbnail url
-                        thumb_url = thumb_url.rsplit('.', 1)[0] + '.jpg'
-                        vision_blocks.append(_url_to_image_block(thumb_url))
-                        vision_blocks.append({
-                            'type': 'text',
-                            'text': f'[Video file: {f.name} — Cloudinary URL: {result.get("secure_url")}]',
-                        })
-                        has_media = True
-                    except Exception as e:
-                        logger.warning('Video upload to Cloudinary failed: %s', e)
-                        vision_blocks.append({
-                            'type': 'text',
-                            'text': f'[Video upload failed: {f.name}]',
-                        })
-                elif ctype.startswith('image/'):
-                    # Resize large images to avoid token limits (max 1MB base64)
-                    if len(file_data) > 800_000:
-                        try:
-                            from PIL import Image
-                            import io
-                            img = Image.open(io.BytesIO(file_data))
-                            img.thumbnail((1024, 1024))
-                            buf = io.BytesIO()
-                            img.save(buf, format='JPEG', quality=80)
-                            file_data = buf.getvalue()
-                            ctype = 'image/jpeg'
-                        except Exception:
-                            pass
-                    vision_blocks.append(_media_to_base64_block(file_data, ctype))
-                    has_media = True
-
-            # Mode B: camera captures (base64 JSON array)
-            camera_images = request.data.get('images', [])
-            if isinstance(camera_images, list):
-                for img in camera_images:
-                    b64_data = img.get('data', '')
-                    mime = img.get('mime_type', 'image/jpeg')
-                    if b64_data:
-                        # Strip data URL prefix if present
-                        if ',' in b64_data:
-                            b64_data = b64_data.split(',', 1)[1]
-                        try:
-                            raw_bytes = base64.b64decode(b64_data)
-                            # Resize if needed
-                            if len(raw_bytes) > 800_000:
-                                from PIL import Image
-                                import io
-                                img_pil = Image.open(io.BytesIO(raw_bytes))
-                                img_pil.thumbnail((1024, 1024))
-                                buf = io.BytesIO()
-                                img_pil.save(buf, format='JPEG', quality=80)
-                                raw_bytes = buf.getvalue()
-                                mime = 'image/jpeg'
-                                b64_data = base64.b64encode(raw_bytes).decode('utf-8')
-                            vision_blocks.append(_media_to_base64_block(raw_bytes, mime))
-                            has_media = True
-                        except Exception as e:
-                            logger.warning('Camera image decode failed: %s', e)
-
-            # ── Build Claude message ──────────────────────────────────────
-            if not logs and not has_media:
-                return Response({
-                    'detail': 'No activity logs or media found. Start logging daily activity or upload farm photos to enable disease detection.'
-                }, status=400)
-
             system_prompt = (
                 "You are the FarmAsyst North AI Disease Detection Engine for poultry farms in northern Ghana. "
-                "Analyse farm activity logs and any provided images/videos to identify early health risks and disease indicators. "
-                "When images are provided, carefully examine visible symptoms: feather condition, posture, discharge, lesions, "
-                "housing conditions, litter quality, and flock behaviour. "
+                "Analyse farm activity logs — and any farm image provided — to identify early health risks "
+                "and disease indicators. "
                 "Common diseases in this region: Newcastle Disease, Gumboro (IBD), Marek's Disease, "
                 "Coccidiosis, Fowl Pox, Fowl Typhoid, Avian Influenza. "
+                "If an image is provided, use visual cues (feather condition, posture, droppings colour, "
+                "housing hygiene, flock behaviour) as additional evidence. "
                 "Return ONLY valid JSON: "
                 '{"risk_level": <"low"|"moderate"|"high"|"critical">, '
                 '"risk_score": <0-100>, '
@@ -418,35 +372,20 @@ class DiseaseDetectionView(APIView):
                 '"immediate_actions": [<str>], '
                 '"preventive_recommendations": [<str>], '
                 '"vet_consultation_required": <true|false>, '
-                '"visual_findings": <str or null>, '
                 '"summary": <short paragraph>}'
             )
 
-            # Compose user message content
-            text_content = (
-                f'Farm data:\n{json.dumps(farm_context, default=str, indent=2)}\n\n'
-                f'{"Images/video provided for visual analysis." if has_media else "No visual media — analyse logs only."}'
-                '\n\nAnalyse for disease risk signals.'
-            )
+            user_message = build_disease_user_message(farm_context, media_data, media_type)
 
-            if vision_blocks:
-                # Interleave vision blocks then text
-                user_content = vision_blocks + [{'type': 'text', 'text': text_content}]
-            else:
-                user_content = text_content
-
-            messages = [{'role': 'user', 'content': user_content}]
-
-            raw = call_claude(system_prompt, messages, max_tokens=1200)
+            raw = call_claude(system_prompt, [user_message], max_tokens=1200)
             clean = raw.strip()
             if clean.startswith('```'):
                 clean = clean.split('\n', 1)[1].rsplit('```', 1)[0].strip()
             result = json.loads(clean)
             result['farm_id']      = str(farm_id)
             result['farm_name']    = farm.name
-            result['has_media']    = has_media
-            result['media_count']  = len(vision_blocks)
             result['generated_at'] = timezone.now().isoformat()
+            result['media_analysed'] = bool(media_data and media_type in SUPPORTED_IMAGE_TYPES)
             return Response(result)
 
         except Farm.DoesNotExist:
@@ -462,8 +401,8 @@ class AIChatView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user    = request.user
-        message = request.data.get('message', '').strip()
+        user       = request.user
+        message    = request.data.get('message', '').strip()
         session_id = request.data.get('session_id')
 
         if not message:
@@ -505,7 +444,7 @@ class AIChatView(APIView):
             return Response({'detail': f'AI assistant unavailable: {exc}'}, status=500)
 
     def get(self, request):
-        """Return chat history for current user's most recent session."""
+        """Return chat history for the current user's most recent session."""
         session_id = request.query_params.get('session_id')
         try:
             if session_id:
@@ -518,5 +457,8 @@ class AIChatView(APIView):
         messages = AIChatMessage.objects.filter(session=session).order_by('created_at')
         return Response({
             'session_id': str(session.id),
-            'messages': [{'role': m.role, 'content': m.content, 'created_at': m.created_at} for m in messages],
+            'messages': [
+                {'role': m.role, 'content': m.content, 'created_at': m.created_at}
+                for m in messages
+            ],
         })
