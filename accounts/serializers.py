@@ -6,13 +6,14 @@ from .models import User, FarmerProfile, InvestorProfile
 class UserSerializer(serializers.ModelSerializer):
     full_name     = serializers.SerializerMethodField()
     credit_score  = serializers.SerializerMethodField()
-    profile_photo = serializers.SerializerMethodField()
+    # Writable ImageField — accepts uploads on PATCH, returns absolute URL on read
+    profile_photo = serializers.ImageField(required=False, allow_null=True, use_url=True)
 
     class Meta:
         model = User
         fields = ['id','email','first_name','last_name','full_name','phone','role',
                   'is_verified','is_active','profile_photo','language','date_joined','credit_score']
-        read_only_fields = ['id','is_verified','is_active','date_joined','credit_score','profile_photo']
+        read_only_fields = ['id','is_verified','is_active','date_joined','credit_score']
 
     def get_full_name(self, obj):
         return obj.get_full_name()
@@ -22,16 +23,21 @@ class UserSerializer(serializers.ModelSerializer):
             return str(obj.farmer_profile.credit_score)
         return None
 
-    def get_profile_photo(self, obj):
-        if not obj.profile_photo:
-            return None
-        request = self.context.get('request')
-        url = obj.profile_photo.url
-        if request:
-            return request.build_absolute_uri(url)
-        from django.conf import settings
-        base = getattr(settings, 'BACKEND_URL', '').rstrip('/')
-        return f'{base}{url}' if base else url
+    def to_representation(self, instance):
+        """Return an absolute URL for profile_photo so the frontend can display it."""
+        ret = super().to_representation(instance)
+        if instance.profile_photo:
+            request = self.context.get('request')
+            url = instance.profile_photo.url
+            if request:
+                ret['profile_photo'] = request.build_absolute_uri(url)
+            else:
+                from django.conf import settings
+                base = getattr(settings, 'BACKEND_URL', '').rstrip('/')
+                ret['profile_photo'] = f'{base}{url}' if base else url
+        else:
+            ret['profile_photo'] = None
+        return ret
 
 
 # Roles that require an admin to manually verify before the account is usable.
