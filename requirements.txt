@@ -15,3 +15,5 @@ gunicorn>=22.0
 whitenoise
 python-dotenv
 africastalking
+cloudinary>=1.36
+django-cloudinary-storage>=0.3.0
