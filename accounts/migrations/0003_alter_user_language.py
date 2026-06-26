@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('accounts', '0002_otpverification_alter_user_role'),
+        ('accounts', '0001_initial'),
     ]
 
     operations = [
