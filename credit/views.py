@@ -8,7 +8,12 @@ from .models import CreditApplication, ApplicationDocument, CreditAgreement
 from .serializers import (CreditApplicationSerializer, CreditApplicationAdminSerializer,
                           ApplicationDocumentSerializer, CreditAgreementSerializer)
 from accounts.permissions import IsFarmer, IsAdmin, IsInvestorOrAdmin, IsFarmerOrAdmin
-from notifications.utils import send_notification
+# NOTE: send_notification is intentionally NOT imported here.
+# All notification firing is handled by notifications/credit_signals.py
+# to prevent double-firing. Only SMS status triggers remain here for
+# transitions not covered by signals (they fire on post_save, so the
+# signal handles creation; the SMS calls below cover status changes
+# that happen in the same save() call as the status update).
 from credit.signals import send_credit_status_sms
 
 
@@ -50,11 +55,11 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         old_status = app.status
         app.status = 'submitted'
         app.submitted_at = timezone.now()
-        app.credit_score_at_submission = request.user.farmer_profile.credit_score if hasattr(request.user, 'farmer_profile') else 0
-        app.save()
-        send_notification(app.farmer, 'application_status',
-                          'Application Submitted',
-                          f'Your application {app.reference} has been submitted for review.')
+        app.credit_score_at_submission = (
+            request.user.farmer_profile.credit_score
+            if hasattr(request.user, 'farmer_profile') else 0
+        )
+        app.save()  # post_save signal fires in_app + email; SMS below
         send_credit_status_sms(app, old_status)
         return Response(CreditApplicationSerializer(app).data)
 
@@ -67,10 +72,7 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         app.reviewer_notes = request.data.get('notes', '')
         app.reviewed_at = timezone.now()
         app.approved_at = timezone.now()
-        app.save()
-        send_notification(app.farmer, 'application_status',
-                          'Application Approved 🎉',
-                          f'Your application {app.reference} has been approved.')
+        app.save()  # signal fires in_app + email + SMS via credit_signals
         send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
@@ -83,10 +85,7 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         app.reviewer_notes = request.data.get('notes', '')
         app.rejection_reason = request.data.get('reason', '')
         app.reviewed_at = timezone.now()
-        app.save()
-        send_notification(app.farmer, 'application_status',
-                          'Application Not Approved',
-                          f'Your application {app.reference} was not approved. Reason: {app.rejection_reason}')
+        app.save()  # signal fires
         send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
@@ -100,9 +99,6 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         app.matched_investor = None
         app.reviewer_notes = request.data.get('notes', app.reviewer_notes)
         app.save()
-        send_notification(app.farmer, 'application_status',
-                          'Application Under Review Again',
-                          f'Your application {app.reference} is being re-reviewed.')
         send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
@@ -122,13 +118,7 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         old_status = app.status
         app.matched_investor = investor
         app.status = 'matched'
-        app.save()
-        send_notification(app.farmer, 'application_status',
-                          'Application Matched',
-                          f'Your application {app.reference} has been matched to an investor.')
-        send_notification(investor, 'new_opportunity',
-                          'New Investment Opportunity',
-                          f'A new farmer application has been matched to you. Check your Opportunities page.')
+        app.save()  # signal notifies farmer + investor + admin
         send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
@@ -150,10 +140,7 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         )
         old_status = app.status
         app.status = 'agreement'
-        app.save()
-        send_notification(app.farmer, 'agreement_created',
-                          'Contract Ready for Signature',
-                          f'An investment agreement for {app.reference} is ready for your signature.')
+        app.save()  # signal notifies farmer + SMS
         send_credit_status_sms(app, old_status)
         return Response(CreditAgreementSerializer(agreement).data, status=201)
 
@@ -167,9 +154,6 @@ class CreditApplicationViewSet(viewsets.ModelViewSet):
         app.status = 'approved'
         app.matched_investor = None
         app.save()
-        send_notification(app.farmer, 'application_status',
-                          'Re-matching in Progress',
-                          f'Your application {app.reference} is being re-matched to another investor.')
         send_credit_status_sms(app, old_status)
         return Response(CreditApplicationAdminSerializer(app).data)
 
@@ -217,7 +201,7 @@ class CreditAgreementViewSet(viewsets.ReadOnlyModelViewSet):
                 app.status = 'disbursed'
                 app.save()
                 send_credit_status_sms(app, old_status)
-        agreement.save()
+        agreement.save()  # post_save signal handles signing notifications
         return Response(CreditAgreementSerializer(agreement).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
@@ -257,20 +241,10 @@ class CreditAgreementViewSet(viewsets.ReadOnlyModelViewSet):
             "This document is generated electronically by FarmAsyst North.",
         ]
         content = "\n".join(lines)
-
         from django.core.files.base import ContentFile
         filename = f"contract_{agreement.reference}.txt"
         agreement.contract_document.save(filename, ContentFile(content.encode('utf-8')), save=True)
-        send_notification(
-            agreement.farmer, 'contract_generated',
-            'Contract Document Ready',
-            f'The investment agreement {agreement.reference} is ready. Please review and sign.'
-        )
-        send_notification(
-            agreement.investor, 'contract_generated',
-            'Contract Document Ready',
-            f'The investment agreement {agreement.reference} is ready. Please review and sign.'
-        )
+        # Signal fires notification to both parties on save
         return Response(CreditAgreementSerializer(agreement).data)
 
 
@@ -282,10 +256,6 @@ from .serializers import (ProjectApplicationSerializer, ProjectApplicationAdminS
 
 
 class ProjectApplicationViewSet(viewsets.ModelViewSet):
-    """
-    Organisation-based group credit applications (Projects).
-    Investors/organisations submit; admins review.
-    """
     filter_backends  = [DjangoFilterBackend]
     filterset_fields = ['status', 'credit_type']
 
@@ -303,9 +273,7 @@ class ProjectApplicationViewSet(viewsets.ModelViewSet):
         return ProjectApplicationSerializer
 
     def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update'):
-            return [IsInvestorOrAdmin()]
-        if self.action in ('submit', 'withdraw'):
+        if self.action in ('create', 'update', 'partial_update', 'submit', 'withdraw'):
             return [IsInvestorOrAdmin()]
         return [IsAuthenticated()]
 
@@ -321,14 +289,7 @@ class ProjectApplicationViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Add at least one farmer entry before submitting.'}, status=400)
         project.status = 'submitted'
         project.submitted_at = timezone.now()
-        project.save()
-        from notifications.utils import notify_admins
-        notify_admins(
-            'project_submitted', f'Project Application Submitted: {project.project_name}',
-            f'{project.organisation} submitted project {project.reference} covering '
-            f'{project.farmer_entries.count()} farmer(s).',
-            priority='high',
-        )
+        project.save()  # signal notifies admin + submitter
         return Response(ProjectApplicationSerializer(project).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
@@ -338,14 +299,7 @@ class ProjectApplicationViewSet(viewsets.ModelViewSet):
         project.reviewer = request.user
         project.reviewer_notes = request.data.get('notes', '')
         project.reviewed_at = timezone.now()
-        project.save()
-        if project.submitted_by:
-            from notifications.utils import send_notification
-            send_notification(
-                project.submitted_by, 'project_status',
-                f'Project Approved: {project.project_name}',
-                f'Your project application {project.reference} has been approved.',
-            )
+        project.save()  # signal notifies submitter
         return Response(ProjectApplicationAdminSerializer(project).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
@@ -356,14 +310,7 @@ class ProjectApplicationViewSet(viewsets.ModelViewSet):
         project.rejection_reason = request.data.get('reason', '')
         project.reviewer_notes = request.data.get('notes', '')
         project.reviewed_at = timezone.now()
-        project.save()
-        if project.submitted_by:
-            from notifications.utils import send_notification
-            send_notification(
-                project.submitted_by, 'project_status',
-                f'Project Not Approved: {project.project_name}',
-                f'Your project {project.reference} was not approved. Reason: {project.rejection_reason}',
-            )
+        project.save()  # signal notifies submitter
         return Response(ProjectApplicationAdminSerializer(project).data)
 
     @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin])
@@ -375,10 +322,8 @@ class ProjectApplicationViewSet(viewsets.ModelViewSet):
         project.save()
         return Response(ProjectApplicationSerializer(project).data)
 
-    @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin],
-            url_path='add_farmer')
+    @action(detail=True, methods=['post'], permission_classes=[IsInvestorOrAdmin], url_path='add_farmer')
     def add_farmer(self, request, pk=None):
-        """Add a farmer entry to a draft project."""
         project = self.get_object()
         if project.status != 'draft':
             return Response({'detail': 'Can only add farmers to draft projects.'}, status=400)
@@ -390,7 +335,6 @@ class ProjectApplicationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], permission_classes=[IsInvestorOrAdmin],
             url_path=r'remove_farmer/(?P<entry_id>[^/.]+)')
     def remove_farmer(self, request, pk=None, entry_id=None):
-        """Remove a farmer entry from a draft project."""
         project = self.get_object()
         if project.status != 'draft':
             return Response({'detail': 'Can only remove farmers from draft projects.'}, status=400)

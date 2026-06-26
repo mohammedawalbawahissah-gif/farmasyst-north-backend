@@ -46,7 +46,6 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
-    # CorsMiddleware MUST be first — before SecurityMiddleware and everything else
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -78,7 +77,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'farmasyst_north.wsgi.application'
 
-# ── Database ──────────────────────────────────────────────────────────────────
 DATABASES = {
     "default": dj_database_url.config(
         default=os.environ.get("DATABASE_URL"),
@@ -86,7 +84,6 @@ DATABASES = {
     )
 }
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
 AUTH_USER_MODEL = 'accounts.User'
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -96,7 +93,6 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-# ── DRF ───────────────────────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -116,11 +112,10 @@ REST_FRAMEWORK = {
     ),
 }
 
-# ── JWT ───────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=config('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', default=60, cast=int)),
+    'ACCESS_TOKEN_LIFETIME':  timedelta(minutes=config('JWT_ACCESS_TOKEN_LIFETIME_MINUTES', default=60, cast=int)),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=config('JWT_REFRESH_TOKEN_LIFETIME_DAYS', default=7, cast=int)),
-    'ROTATE_REFRESH_TOKENS': True,
+    'ROTATE_REFRESH_TOKENS':  True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -128,16 +123,11 @@ SIMPLE_JWT = {
 }
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-# Always include localhost for local dev. On Render, set CORS_ALLOWED_ORIGINS
-# as a comma-separated env var, e.g.:
-#   https://farmasyst-north-frontend.onrender.com,http://localhost:5173
 _cors_env = os.environ.get(
     "CORS_ALLOWED_ORIGINS",
     config('FRONTEND_URL', default='http://localhost:5173'),
 )
 CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()]
-
-# Ensure localhost dev origins are always present (harmless in production)
 _dev_origins = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
 for _o in _dev_origins:
     if _o not in CORS_ALLOWED_ORIGINS:
@@ -145,37 +135,19 @@ for _o in _dev_origins:
 
 _csrf_env = os.environ.get("CSRF_TRUSTED_ORIGINS", "")
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in _csrf_env.split(",") if o.strip()]
-
 CORS_ALLOW_CREDENTIALS = True
-
 CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
-    "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
+    "accept", "accept-encoding", "authorization", "content-type",
+    "dnt", "origin", "user-agent", "x-csrftoken", "x-requested-with",
 ]
-
-CORS_ALLOW_METHODS = [
-    "DELETE",
-    "GET",
-    "OPTIONS",
-    "PATCH",
-    "POST",
-    "PUT",
-]
+CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
 
 # ── Static & Media ────────────────────────────────────────────────────────────
-STATIC_URL = '/static/'
+STATIC_URL  = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL   = '/media/'
+MEDIA_ROOT  = BASE_DIR / 'media'
 
 USE_S3 = config('USE_S3', default=False, cast=bool)
 if USE_S3:
@@ -192,8 +164,31 @@ LANGUAGE_CODE = 'en-us'
 TIME_ZONE     = 'Africa/Accra'
 USE_I18N      = True
 USE_TZ        = True
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+# Configure via environment variables. Supports SendGrid (recommended),
+# Mailgun, or any SMTP provider.
+#
+# For SendGrid: set EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+#   EMAIL_HOST=smtp.sendgrid.net  EMAIL_PORT=587
+#   EMAIL_HOST_USER=apikey  EMAIL_HOST_PASSWORD=<your_sendgrid_api_key>
+#
+# For local development/testing, leave EMAIL_BACKEND unset to use the
+# console backend (emails print to logs, nothing actually sent).
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default='django.core.mail.backends.console.EmailBackend',
+)
+EMAIL_HOST          = config('EMAIL_HOST',          default='smtp.sendgrid.net')
+EMAIL_PORT          = config('EMAIL_PORT',          default=587, cast=int)
+EMAIL_USE_TLS       = config('EMAIL_USE_TLS',       default=True, cast=bool)
+EMAIL_HOST_USER     = config('EMAIL_HOST_USER',     default='apikey')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL  = config(
+    'DEFAULT_FROM_EMAIL',
+    default='FarmAsyst North <noreply@farmasystnorth.com>',
+)
 
 # ── Third-party credentials ───────────────────────────────────────────────────
 MOMO_BASE_URL         = config('MOMO_BASE_URL',         default='https://sandbox.momodeveloper.mtn.com')
@@ -201,47 +196,30 @@ MOMO_SUBSCRIPTION_KEY = config('MOMO_SUBSCRIPTION_KEY', default='')
 MOMO_API_USER         = config('MOMO_API_USER',         default='')
 MOMO_API_KEY          = config('MOMO_API_KEY',          default='')
 MOMO_ENVIRONMENT      = config('MOMO_ENVIRONMENT',      default='sandbox')
-
-# Public URL of THIS backend (used to build the MoMo X-Callback-Url).
-# On Render this is your service URL, e.g. https://farmasyst-north-backend.onrender.com
 BACKEND_URL           = config('BACKEND_URL',           default='http://localhost:8000')
-# Optional full override of the callback URL. Leave blank to auto-derive
-# from BACKEND_URL as `${BACKEND_URL}/api/v1/webhooks/momo/`.
 MOMO_CALLBACK_URL     = config('MOMO_CALLBACK_URL',     default='')
-# Optional shared secret appended as ?key=... to the callback URL so the
-# webhook endpoint can reject requests that don't carry it. Leave blank
-# while testing in the sandbox; set it before going to production.
 MOMO_WEBHOOK_SECRET   = config('MOMO_WEBHOOK_SECRET',   default='')
 
 AFRICASTALKING_USERNAME = config('AFRICASTALKING_USERNAME', default='')
-AFRICASTALKING_API_KEY = config('AFRICASTALKING_API_KEY', default='')
+AFRICASTALKING_API_KEY  = config('AFRICASTALKING_API_KEY',  default='')
 
-PAYSTACK_SECRET_KEY   = config('PAYSTACK_SECRET_KEY',   default='')
-PAYSTACK_PUBLIC_KEY   = config('PAYSTACK_PUBLIC_KEY',   default='')
+PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
+PAYSTACK_PUBLIC_KEY = config('PAYSTACK_PUBLIC_KEY', default='')
 
 HUBTEL_CLIENT_ID      = config('HUBTEL_CLIENT_ID',      default='')
 HUBTEL_CLIENT_SECRET  = config('HUBTEL_CLIENT_SECRET',  default='')
 HUBTEL_SENDER_ID      = config('HUBTEL_SENDER_ID',      default='FarmAsyst')
-
-# Hubtel Payments (Online Checkout) — separate product from Hubtel SMS above.
-# Issued only once your Hubtel merchant payment account is approved:
-# https://unity.hubtel.com/merchantaccount/dashboard
 HUBTEL_PAYMENT_CLIENT_ID       = config('HUBTEL_PAYMENT_CLIENT_ID',       default='')
 HUBTEL_PAYMENT_CLIENT_SECRET   = config('HUBTEL_PAYMENT_CLIENT_SECRET',   default='')
 HUBTEL_MERCHANT_ACCOUNT_NUMBER = config('HUBTEL_MERCHANT_ACCOUNT_NUMBER', default='')
 
-TWILIO_ACCOUNT_SID    = config('TWILIO_ACCOUNT_SID',    default='')
-TWILIO_AUTH_TOKEN     = config('TWILIO_AUTH_TOKEN',     default='')
-TWILIO_FROM_NUMBER    = config('TWILIO_FROM_NUMBER',    default='')
+TWILIO_ACCOUNT_SID = config('TWILIO_ACCOUNT_SID', default='')
+TWILIO_AUTH_TOKEN  = config('TWILIO_AUTH_TOKEN',  default='')
+TWILIO_FROM_NUMBER = config('TWILIO_FROM_NUMBER', default='')
 
-FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:5173')
-
-# Anthropic AI
+FRONTEND_URL      = config('FRONTEND_URL', default='http://localhost:5173')
 ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
 
-# Ensure payment-gateway errors (MoMo, Paystack, Hubtel, Twilio) actually
-# show up in `render logs` — Render captures stdout, so route everything
-# there with enough detail to debug a failed prompt/charge.
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -253,8 +231,9 @@ LOGGING = {
     },
     'root': {'handlers': ['console'], 'level': 'INFO'},
     'loggers': {
-        'payments':    {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
-        'marketplace': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
-        'django':      {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+        'payments':       {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'marketplace':    {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'notifications':  {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'django':         {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
     },
 }

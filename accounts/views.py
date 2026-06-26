@@ -8,12 +8,27 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
+from django.utils import timezone
 from .models import User, FarmerProfile, InvestorProfile
 from .serializers import (UserSerializer, RegisterSerializer,
                           FarmerProfileSerializer, InvestorProfileSerializer,
                           ChangePasswordSerializer, ADMIN_VERIFIED_ROLES)
 from .permissions import IsAdmin, IsFarmer, IsInvestor
-from farmasyst_north.sms_service import notify_officer_assigned
+from farmasyst_north.sms_service import notify_officer_assigned, send_otp
+
+GATED_ROLES = ADMIN_VERIFIED_ROLES
+
+
+def _issue_otp(user, channel):
+    from accounts.otp_models import OTPVerification
+    OTPVerification.objects.filter(user=user, channel=channel, is_used=False).update(is_used=True)
+    otp = OTPVerification.objects.create(user=user, channel=channel)
+    if channel == OTPVerification.Channel.SMS and user.phone:
+        send_otp(user.phone, otp.code)
+    elif channel == OTPVerification.Channel.EMAIL and user.email:
+        from farmasyst_north.email_service import send_email_otp
+        send_email_otp(user.email, user.get_full_name(), otp.code)
+    return otp
 
 
 class RegisterView(generics.CreateAPIView):
@@ -25,46 +40,105 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-
         role = user.role
 
-        # Roles that require admin verification — return a pending message, no tokens
-        if role in ADMIN_VERIFIED_ROLES:
+        from accounts.otp_models import OTPVerification
+        otp_channels = []
+        if user.phone:
+            _issue_otp(user, OTPVerification.Channel.SMS)
+            otp_channels.append('sms')
+        if user.email:
+            _issue_otp(user, OTPVerification.Channel.EMAIL)
+            otp_channels.append('email')
+
+        if role in GATED_ROLES:
+            from farmasyst_north.email_service import send_account_pending_email
+            send_account_pending_email(user.email, user.get_full_name(), role)
             return Response({
                 'requires_verification': True,
+                'requires_otp': True,
+                'otp_channels': otp_channels,
+                'user_id': str(user.id),
                 'detail': (
-                    'Account created successfully. Your account requires admin approval before '
-                    'you can log in. A FarmAsyst North administrator will review and activate your account shortly.'
+                    'Account created. Please verify your contact details with the OTP code sent to you. '
+                    'Your account also requires admin approval before you can log in.'
                 ),
             }, status=status.HTTP_201_CREATED)
 
-        # All other roles — account is active, issue tokens for immediate login
         refresh = RefreshToken.for_user(user)
         return Response({
             'requires_verification': False,
-            'detail': 'Account created successfully.',
+            'requires_otp': True,
+            'otp_channels': otp_channels,
+            'user_id': str(user.id),
+            'detail': 'Account created. Please verify your contact details with the OTP code sent to you.',
             'access':  str(refresh.access_token),
             'refresh': str(refresh),
             'user': UserSerializer(user, context={'request': request}).data,
         }, status=status.HTTP_201_CREATED)
 
 
+class VerifyOTPView(generics.GenericAPIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from accounts.otp_models import OTPVerification
+        user_id = request.data.get('user_id')
+        code    = request.data.get('code', '').strip()
+        channel = request.data.get('channel', 'sms')
+
+        if not user_id or not code:
+            return Response({'detail': 'user_id and code are required.'}, status=400)
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'detail': 'User not found.'}, status=404)
+        try:
+            otp = OTPVerification.objects.filter(
+                user=user, channel=channel, is_used=False
+            ).latest('created_at')
+        except OTPVerification.DoesNotExist:
+            return Response({'detail': 'No active OTP found. Please request a new one.'}, status=400)
+
+        if not otp.is_valid():
+            return Response({'detail': 'This OTP has expired. Please request a new one.'}, status=400)
+        if otp.code != code:
+            return Response({'detail': 'Incorrect code. Please try again.'}, status=400)
+
+        otp.is_used = True
+        otp.save()
+        if not user.is_verified:
+            user.is_verified = True
+            user.save(update_fields=['is_verified'])
+
+        return Response({'detail': f'{channel.upper()} verified successfully.', 'is_verified': True})
+
+
+class ResendOTPView(generics.GenericAPIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from accounts.otp_models import OTPVerification
+        user_id = request.data.get('user_id')
+        channel = request.data.get('channel', 'sms')
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response({'detail': 'User not found.'}, status=404)
+        if channel not in (OTPVerification.Channel.SMS, OTPVerification.Channel.EMAIL):
+            return Response({'detail': 'channel must be "sms" or "email".'}, status=400)
+        _issue_otp(user, channel)
+        return Response({'detail': f'New OTP sent via {channel.upper()}.'})
+
+
 class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
-        user = self.user
-
-        # Account suspended by admin
-        if not user.is_active:
+        if not self.user.is_active:
             raise AuthenticationFailed(
-                'Your account has been suspended or is pending admin approval. '
+                'Your account is pending admin approval or has been suspended. '
                 'Please contact a FarmAsyst North administrator.'
             )
-
-        # is_verified is a soft admin-quality flag — don't use it as a login gate here.
-        # Roles that require admin verification already start with is_active=False,
-        # so the check above handles them correctly.
-
         return data
 
 
@@ -134,14 +208,8 @@ class FarmerProfileListView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        if user.role == 'admin':
-            target_users = User.objects.filter(role='farmer', is_active=True)
-        else:
-            target_users = User.objects.filter(role='farmer', is_active=True, is_verified=True)
-
-        for farmer in target_users:
+        for farmer in User.objects.filter(role='farmer', is_active=True):
             FarmerProfile.objects.get_or_create(user=farmer)
-
         if user.role == 'admin':
             return FarmerProfile.objects.select_related('user').filter(user__role='farmer', user__is_active=True)
         return FarmerProfile.objects.select_related('user').filter(
@@ -223,7 +291,6 @@ class UserViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='update_credit_score')
     def update_credit_score(self, request, pk=None):
-        from django.utils import timezone
         user = self.get_object()
         if not hasattr(user, 'farmer_profile'):
             return Response({'detail': 'This user does not have a farmer profile.'}, status=400)
@@ -233,12 +300,9 @@ class UserViewSet(viewsets.ModelViewSet):
             if score < 0 or score > 999.99:
                 raise ValueError
         except (TypeError, ValueError):
-            return Response({'detail': 'Invalid credit score. Must be a number between 0 and 999.99.'}, status=400)
+            return Response({'detail': 'Invalid credit score. Must be between 0 and 999.99.'}, status=400)
         profile = user.farmer_profile
         profile.credit_score = score
         profile.credit_score_updated_at = timezone.now()
         profile.save()
-        return Response({
-            'detail': f'Credit score updated to {score} for {user.get_full_name()}.',
-            'credit_score': str(score),
-        })
+        return Response({'detail': f'Credit score updated to {score} for {user.get_full_name()}.', 'credit_score': str(score)})

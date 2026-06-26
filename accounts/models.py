@@ -129,3 +129,6 @@ class InvestorProfile(models.Model):
 
     def __str__(self):
         return f'{self.organisation} ({self.investor_type})'
+
+# OTP verification model — kept in otp_models.py, re-exported here for Django app registry
+from accounts.otp_models import OTPVerification  # noqa: F401
