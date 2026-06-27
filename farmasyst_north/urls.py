@@ -24,7 +24,7 @@ from payments.views import (RepaymentScheduleViewSet, InitiateRepaymentView,
                              PayFullBalanceView)
 from vet.views import VetProfileViewSet, VetServiceViewSet, VetBookingViewSet
 from inputs.views import InputDealerProfileViewSet, FarmInputViewSet
-from ai.views import CreditworthinessView, DiseaseDetectionView, AIChatView
+from ai.views import CreditworthinessView, DiseaseDetectionView, AIChatView, FlockCountView
 
 router = DefaultRouter()
 router.register(r'users',                                   UserViewSet,                 basename='users')
@@ -89,6 +89,7 @@ urlpatterns = [
     path('api/v1/ai/creditworthiness/',  CreditworthinessView.as_view()),
     path('api/v1/ai/disease-detection/', DiseaseDetectionView.as_view()),
     path('api/v1/ai/chat/',              AIChatView.as_view()),
+    path('api/v1/ai/flock-count/',       FlockCountView.as_view()),
 
     # Real-time notification stream (SSE)
     # Client connects with: GET /api/v1/notifications/stream/?token=<access_token>

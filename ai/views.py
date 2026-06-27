@@ -395,6 +395,88 @@ class DiseaseDetectionView(APIView):
             return Response({'detail': f'AI analysis failed: {exc}'}, status=500)
 
 
+# ── AI: Flock Count Vision ───────────────────────────────────────────────────
+
+class FlockCountView(APIView):
+    """
+    Proxy a flock-count vision request to Claude.
+    Accepts: { base64_image: str, media_type: str }
+    Returns: { count: int, confidence: str, notes: str }
+    """
+    permission_classes = [IsAuthenticated]
+
+    FLOCK_COUNT_PROMPT = (
+        "You are an expert poultry farm monitoring AI. Count the number of birds "
+        "(chickens, broilers, layers, or any poultry) visible in this image.\n\n"
+        "Respond ONLY with a JSON object (no markdown, no preamble) in exactly this shape:\n"
+        '{"count": <integer — best estimate of visible bird count>, '
+        '"confidence": "<high|medium|low>", '
+        '"notes": "<brief 1-sentence observation about visibility, crowding, or any counting caveats>"}\n\n'
+        "Rules:\n"
+        "- If the image does not show poultry at all, set count to 0 and explain in notes.\n"
+        "- If birds are partially obscured or very densely packed, estimate carefully and lower confidence accordingly.\n"
+        "- Do not include any text outside the JSON object."
+    )
+
+    def post(self, request):
+        base64_image = request.data.get('base64_image')
+        media_type   = request.data.get('media_type', 'image/jpeg')
+
+        if not base64_image:
+            return Response({'detail': 'base64_image is required.'}, status=400)
+
+        if media_type not in SUPPORTED_IMAGE_TYPES:
+            return Response({'detail': f'Unsupported media type: {media_type}'}, status=400)
+
+        # Basic size guard (~10MB decoded ≈ ~14MB base64)
+        if len(base64_image) > 14_000_000:
+            return Response({'detail': 'Image too large. Please use a smaller photo.'}, status=400)
+
+        try:
+            base64.b64decode(base64_image, validate=True)
+        except Exception:
+            return Response({'detail': 'Invalid base64 image data.'}, status=400)
+
+        try:
+            api_key = getattr(settings, 'ANTHROPIC_API_KEY', '')
+            if not api_key:
+                raise ValueError('ANTHROPIC_API_KEY is not configured.')
+
+            headers = {
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            }
+            payload = {
+                'model': ANTHROPIC_MODEL,
+                'max_tokens': 200,
+                'messages': [{
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'image',
+                            'source': {
+                                'type': 'base64',
+                                'media_type': media_type,
+                                'data': base64_image,
+                            },
+                        },
+                        {'type': 'text', 'text': self.FLOCK_COUNT_PROMPT},
+                    ],
+                }],
+            }
+            resp = requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=30)
+            resp.raise_for_status()
+            raw   = resp.json()['content'][0]['text'].strip()
+            clean = raw.replace('```json', '').replace('```', '').strip()
+            result = json.loads(clean)
+            return Response(result)
+
+        except Exception as exc:
+            logger.error('Flock count vision failed: %s', exc)
+            return Response({'detail': f'AI flock count failed: {exc}'}, status=500)
+
+
 # ── AI: Role-Based Chat Assistant ────────────────────────────────────────────
 
 class AIChatView(APIView):
