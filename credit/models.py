@@ -6,9 +6,10 @@ from farms.models import Farm
 
 class CreditApplication(models.Model):
     class CreditType(models.TextChoices):
-        FUNDING  = 'funding',  'Funding'
-        INPUTS   = 'inputs',   'Farm Inputs'
-        TRAINING = 'training', 'Training Enrolment'
+        DIRECT_FINANCING    = 'direct_financing',    'Direct Financing'
+        FARM_INPUTS         = 'farm_inputs',         'Farm Inputs'
+        STRUCTURED_TRAINING = 'structured_training', 'Structured Training'
+        MIXED               = 'mixed',               'Mixed'
 
     class Status(models.TextChoices):
         DRAFT        = 'draft',        'Draft'
