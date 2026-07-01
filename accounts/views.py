@@ -81,6 +81,7 @@ class RegisterView(generics.CreateAPIView):
 
 class VerifyOTPView(generics.GenericAPIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'otp_verify'
 
     def post(self, request):
         from accounts.otp_models import OTPVerification
@@ -117,6 +118,7 @@ class VerifyOTPView(generics.GenericAPIView):
 
 class ResendOTPView(generics.GenericAPIView):
     permission_classes = [AllowAny]
+    throttle_scope = 'otp_resend'
 
     def post(self, request):
         from accounts.otp_models import OTPVerification
@@ -145,6 +147,7 @@ class VerifiedTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class VerifiedTokenObtainPairView(TokenObtainPairView):
     serializer_class = VerifiedTokenObtainPairSerializer
+    throttle_scope = 'login'
 
 
 class LogoutView(generics.GenericAPIView):

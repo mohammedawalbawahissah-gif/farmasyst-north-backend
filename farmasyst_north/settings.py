@@ -12,6 +12,23 @@ SECRET_KEY = os.environ.get("SECRET_KEY")
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
 
+# Fail loudly instead of silently deploying an insecure configuration.
+# A DEBUG=True Render/production deploy leaks tracebacks (source code,
+# local variables, settings) to any visitor who hits a 500 error, and an
+# empty/weak SECRET_KEY undermines session and token signing.
+if not DEBUG:
+    if not SECRET_KEY or len(SECRET_KEY) < 40:
+        raise ValueError(
+            "SECRET_KEY is missing or too short for a non-DEBUG deployment. "
+            "Generate one with `python -c \"from django.core.management.utils "
+            "import get_random_secret_key; print(get_random_secret_key())\"`."
+        )
+    if not any(h.strip() for h in ALLOWED_HOSTS):
+        raise ValueError(
+            "ALLOWED_HOSTS is empty with DEBUG=False. Set it to your real "
+            "domain(s), e.g. ALLOWED_HOSTS=api.farmasystnorth.com"
+        )
+
 DJANGO_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -112,6 +129,19 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
     ),
+    # Scoped throttles applied per-view via `throttle_scope`. Without these,
+    # OTP verification (6-digit code, ~1M combinations) and login were
+    # brute-forceable with no attempt limit, and the AI endpoints (which each
+    # cost real money via the Anthropic API) had no per-user cap.
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.ScopedRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'otp_verify': '5/min',
+        'otp_resend': '3/min',
+        'login': '10/min',
+        'ai': '30/hour',
+    },
 }
 
 SIMPLE_JWT = {
@@ -210,6 +240,12 @@ MOMO_ENVIRONMENT      = config('MOMO_ENVIRONMENT',      default='sandbox')
 BACKEND_URL           = config('BACKEND_URL',           default='http://localhost:8000')
 MOMO_CALLBACK_URL     = config('MOMO_CALLBACK_URL',     default='')
 MOMO_WEBHOOK_SECRET   = config('MOMO_WEBHOOK_SECRET',   default='')
+# Hubtel doesn't offer a native signature header on checkout callbacks (unlike
+# Paystack/Stripe) — their own docs say securing the webhook is entirely on
+# the developer. This shared secret is appended as ?key=... on the callback
+# URL, mirroring the MoMo pattern above, so HubtelWebhookView can reject
+# unauthenticated callers instead of trusting any POST that hits the endpoint.
+HUBTEL_WEBHOOK_SECRET = config('HUBTEL_WEBHOOK_SECRET', default='')
 
 AFRICASTALKING_USERNAME = config('AFRICASTALKING_USERNAME', default='')
 AFRICASTALKING_API_KEY  = config('AFRICASTALKING_API_KEY',  default='')

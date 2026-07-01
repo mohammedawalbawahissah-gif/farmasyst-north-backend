@@ -198,6 +198,24 @@ class PaystackService:
         except requests.RequestException as e:
             return {'success': False, 'error': str(e)}
 
+    def verify_webhook_signature(self, raw_body: bytes, signature_header: str | None) -> bool:
+        """
+        Verify the `x-paystack-signature` header Paystack sends on every webhook
+        POST: HMAC-SHA512 of the raw request body, keyed with the secret key.
+        Without this, anyone who knows/guesses a payment reference can POST a
+        fake 'charge.success' event and have it treated as a real payment.
+        """
+        import hmac
+        import hashlib
+        if not signature_header or not settings.PAYSTACK_SECRET_KEY:
+            return False
+        expected = hmac.new(
+            settings.PAYSTACK_SECRET_KEY.encode('utf-8'),
+            raw_body,
+            hashlib.sha512,
+        ).hexdigest()
+        return hmac.compare_digest(expected, signature_header)
+
 
 class HubtelSMSService:
     """Hubtel SMS for Ghana-local notifications."""
@@ -328,8 +346,20 @@ def build_momo_callback_url() -> str:
 
 
 def build_hubtel_callback_url() -> str:
-    """Build the callbackUrl Hubtel will POST the final checkout status to."""
-    return f"{settings.BACKEND_URL.rstrip('/')}/api/v1/webhooks/hubtel/"
+    """
+    Build the callbackUrl Hubtel will POST the final checkout status to.
+
+    Appends ?key=<HUBTEL_WEBHOOK_SECRET> when that secret is configured, so
+    HubtelWebhookView can reject callers that don't know the secret. Hubtel
+    has no built-in payload signature (unlike Paystack), so this shared-secret
+    URL is the mitigation — mirrors build_momo_callback_url() above.
+    """
+    base = f"{settings.BACKEND_URL.rstrip('/')}/api/v1/webhooks/hubtel/"
+    secret = getattr(settings, 'HUBTEL_WEBHOOK_SECRET', '')
+    if secret:
+        sep = '&' if '?' in base else '?'
+        return f'{base}{sep}key={secret}'
+    return base
 
 
 momo_service    = MoMoService()

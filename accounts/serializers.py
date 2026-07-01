@@ -13,7 +13,11 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ['id','email','first_name','last_name','full_name','phone','role',
                   'is_verified','is_active','profile_photo','language','date_joined','credit_score']
-        read_only_fields = ['id','is_verified','is_active','date_joined','credit_score']
+        # 'role' MUST stay read-only here — this serializer is used by MeView for
+        # self-service profile updates. Making it writable let any authenticated
+        # user PATCH their own role to 'admin' (privilege escalation). Role changes
+        # must only ever happen through an admin-gated endpoint.
+        read_only_fields = ['id','role','is_verified','is_active','date_joined','credit_score']
 
     def get_full_name(self, obj):
         return obj.get_full_name()

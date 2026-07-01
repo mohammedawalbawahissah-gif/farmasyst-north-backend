@@ -99,12 +99,30 @@ class OrderViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'produce_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            produce = Produce.objects.select_related('seller', 'farm').get(
+            # select_for_update() locks this row until the transaction commits,
+            # so two concurrent orders can't both read the same stock figure and
+            # both succeed — without it, overselling was possible under load.
+            produce = Produce.objects.select_related('seller', 'farm').select_for_update().get(
                 id=produce_id, status='active'
             )
         except Produce.DoesNotExist:
             return Response(
                 {'detail': 'Produce not found or no longer available.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if quantity <= 0:
+            return Response(
+                {'detail': 'Quantity must be greater than zero.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # This check was previously missing entirely — orders were accepted
+        # for more than was in stock, and quantity_available was just clamped
+        # to 0 afterwards instead of being validated up front.
+        if quantity > produce.quantity_available:
+            return Response(
+                {'detail': f'Only {produce.quantity_available} {produce.unit} available.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

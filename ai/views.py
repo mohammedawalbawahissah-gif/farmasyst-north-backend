@@ -151,6 +151,7 @@ ROLE_SYSTEM_PROMPTS = {
 
 class CreditworthinessView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = 'ai'
 
     def post(self, request):
         farmer_id = request.data.get('farmer_id')
@@ -267,6 +268,7 @@ class CreditworthinessView(APIView):
 
 class DiseaseDetectionView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = 'ai'
 
     def post(self, request):
         farm_id = request.data.get('farm_id')
@@ -404,6 +406,7 @@ class FlockCountView(APIView):
     Returns: { count: int, confidence: str, notes: str }
     """
     permission_classes = [IsAuthenticated]
+    throttle_scope = 'ai'
 
     FLOCK_COUNT_PROMPT = (
         "You are an expert poultry farm monitoring AI. Count the number of birds "
@@ -481,6 +484,7 @@ class FlockCountView(APIView):
 
 class AIChatView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_scope = 'ai'
 
     def post(self, request):
         user       = request.user

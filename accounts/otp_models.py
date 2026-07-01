@@ -1,6 +1,5 @@
 import uuid
-import random
-import string
+import secrets
 from django.db import models
 from django.utils import timezone
 from datetime import timedelta
@@ -8,7 +7,9 @@ from accounts.models import User
 
 
 def _generate_otp():
-    return ''.join(random.choices(string.digits, k=6))
+    # secrets.randbelow is a CSPRNG (unlike the `random` module, which is a
+    # predictable Mersenne Twister and unsuitable for anything security-related).
+    return f'{secrets.randbelow(1_000_000):06d}'
 
 
 class OTPVerification(models.Model):

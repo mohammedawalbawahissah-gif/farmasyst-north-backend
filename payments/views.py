@@ -243,6 +243,13 @@ class PaystackWebhookView(generics.GenericAPIView):
     permission_classes = []
 
     def post(self, request):
+        # Verify this POST actually came from Paystack before trusting anything
+        # in it — without this check, anyone who knows a payment reference could
+        # forge a 'charge.success' event and have it marked as paid.
+        signature = request.META.get('HTTP_X_PAYSTACK_SIGNATURE')
+        if not paystack_service.verify_webhook_signature(request.body, signature):
+            return Response({'detail': 'Invalid signature.'}, status=status.HTTP_403_FORBIDDEN)
+
         event = request.data.get('event')
         data  = request.data.get('data', {})
         if event == 'charge.success':
@@ -425,6 +432,14 @@ class HubtelWebhookView(generics.GenericAPIView):
     permission_classes = []
 
     def post(self, request):
+        # Hubtel has no native payload signature, so we rely on the shared
+        # secret appended to the callback URL (see build_hubtel_callback_url).
+        # Without this, anyone who knows/guesses an order reference could POST
+        # a fake 'Success' status and get an order marked paid for free.
+        secret = getattr(settings, 'HUBTEL_WEBHOOK_SECRET', '')
+        if secret and request.query_params.get('key') != secret:
+            return Response({'detail': 'Invalid or missing key.'}, status=status.HTTP_403_FORBIDDEN)
+
         data = request.data
         inner = data.get('Data', {})
         client_reference = (inner.get('ClientReference') or '').strip()
