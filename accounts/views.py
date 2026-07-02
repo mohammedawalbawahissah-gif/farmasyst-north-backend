@@ -10,6 +10,7 @@ from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters
 from django.utils import timezone
+from django.db.models import Sum
 from .models import User, FarmerProfile, InvestorProfile
 from .serializers import (UserSerializer, RegisterSerializer,
                           FarmerProfileSerializer, InvestorProfileSerializer,
@@ -311,3 +312,38 @@ class UserViewSet(viewsets.ModelViewSet):
         profile.credit_score_updated_at = timezone.now()
         profile.save()
         return Response({'detail': f'Credit score updated to {score} for {user.get_full_name()}.', 'credit_score': str(score)})
+
+
+class AdminAnalyticsView(generics.GenericAPIView):
+    """
+    GET /api/v1/admin/analytics/
+
+    Aggregate platform stats for the admin dashboard. This endpoint didn't
+    exist at all previously — the mobile app's Admin Dashboard called it
+    anyway, always got a 404, and silently showed "GHS 0" for total
+    disbursed (the one stat with no client-side fallback). The web app
+    worked around the gap by computing the same numbers client-side from
+    several separate endpoints; this gives both platforms one authoritative
+    source instead.
+    """
+    permission_classes = [IsAdmin]
+
+    def get(self, request):
+        # Local imports to avoid a hard cross-app import at module load time.
+        from credit.models import CreditApplication
+        from payments.models import Disbursement
+
+        total_users    = User.objects.count()
+        pending_users  = User.objects.filter(is_verified=False).count()
+        total_applications = CreditApplication.objects.count()
+        total_disbursed = (
+            Disbursement.objects.filter(status='completed')
+            .aggregate(total=Sum('amount'))['total'] or 0
+        )
+
+        return Response({
+            'total_users': total_users,
+            'pending_users': pending_users,
+            'total_applications': total_applications,
+            'total_disbursed': str(total_disbursed),
+        })

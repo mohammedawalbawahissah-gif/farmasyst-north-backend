@@ -11,7 +11,7 @@ from accounts.views import (RegisterView, LogoutView, MeView, ChangePasswordView
                              FarmerProfileListView, FarmerProfileDetailView,
                              InvestorProfileListView, UserViewSet,
                              VerifiedTokenObtainPairView,
-                             VerifyOTPView, ResendOTPView)
+                             VerifyOTPView, ResendOTPView, AdminAnalyticsView)
 from farms.views import FarmViewSet, FarmActivityLogViewSet, FarmAuditReportViewSet
 from credit.views import (CreditApplicationViewSet, DocumentUploadView,
                            CreditAgreementViewSet, ProjectApplicationViewSet)
@@ -65,6 +65,7 @@ urlpatterns = [
     # OTP verification
     path('api/v1/auth/verify-otp/',    VerifyOTPView.as_view()),
     path('api/v1/auth/resend-otp/',    ResendOTPView.as_view()),
+    path('api/v1/admin/analytics/',    AdminAnalyticsView.as_view()),
 
     # Profiles
     path('api/v1/profiles/farmer/',             FarmerProfileView.as_view()),

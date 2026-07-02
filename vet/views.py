@@ -108,6 +108,12 @@ class VetBookingViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsVet])
     def my_bookings(self, request):
         qs = VetBooking.objects.filter(vet=request.user)
+        # The mobile Bookings screen has a pending/confirmed/completed tab bar
+        # that relies on this filter — without it, every tab showed the same
+        # unfiltered list since nothing was applying it client-side either.
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
         return Response(VetBookingSerializer(qs, many=True).data)
 
     @action(detail=True, methods=['post'])
